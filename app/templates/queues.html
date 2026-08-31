@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}内容队列 · 招聘内容运营工作台{% endblock %}
+{% block content %}
+<section class="page-heading"><span class="eyebrow">CONTENT QUEUE</span><h1>内容队列</h1><p>这里生成公众号和微信群内容，所有项目都需要人工确认，不自动发送。</p></section>
+<div class="notice notice-info">“待发送”是内部运营状态，不代表已经调用公众号或个人微信接口。</div>
+<div class="queue-list">{% for item in items %}<article class="panel queue-item"><div class="queue-header"><div><span class="channel-badge {% if item.channel == '公众号' %}channel-official{% else %}channel-group{% endif %}">{{ item.channel }}</span><h2>{{ item.audience_group }}</h2></div><span class="status-badge">{{ item.status }}</span></div><div class="queue-preview">{{ item.content }}</div><div class="queue-meta">生成时间 {{ item.created_at }} · 对应岗位 #{{ item.job_id }}{% if item.channel == '公众号' %}<a class="button button-primary queue-copy-link" href="/distribution/{{ item.id }}/wechat">打开公众号复制稿</a>{% endif %}</div></article>{% else %}<div class="empty-panel"><strong>暂无待发送内容</strong><p>只有人工审核通过的岗位才能生成渠道内容。</p><a class="button button-secondary" href="/jobs?data_type=demo&status=可发布">查看可发布演示岗位</a></div>{% endfor %}</div>
+{% endblock %}

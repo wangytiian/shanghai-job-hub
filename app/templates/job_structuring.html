@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}公告结构化 · 岗位中心{% endblock %}
+{% block content %}
+<a class="back-link" href="/jobs/{{ job.id }}">← 返回公告详情</a>
+<section class="page-heading">
+  <span class="eyebrow">ANNOUNCEMENT STRUCTURING</span>
+  <h1>公告结构化</h1>
+  <p>根据公开原文补齐事实字段。提交后仍需最终人工审核，系统不会自动发布。</p>
+</section>
+<div class="notice notice-warning"><strong>请以原文为准。</strong>不得自行推断薪资、编制、转正、专业不限或截止日期。</div>
+{% if ai_feedback == 'error' %}<div class="notice notice-error" role="alert"><strong>AI 预填未完成。</strong>{{ ai_message }}</div>{% elif ai_feedback == 'success' %}<div class="notice notice-success" role="status"><strong>AI 预填已生成。</strong>{{ ai_message }} AI 只能填写原文有依据的字段；岗位在附件或无法确认时会标记为“待附件核验/信息不足”。请逐项核对后再提交。{{ ai_draft.uncertainties }}</div>{% endif %}
+<div class="detail-layout">
+  <section class="panel detail-primary">
+    <div class="section-heading"><div><span class="eyebrow">FORM</span><h2>补全岗位事实</h2></div></div>
+    <form method="post" action="/jobs/{{ job.id }}/structure/ai-draft" data-ai-prefill-form>
+      <button class="button button-secondary" type="submit" data-ai-prefill-button>AI 预填表单</button>
+      <span class="ai-prefill-status" data-ai-prefill-status hidden aria-live="polite">AI 正在读取公告，请稍候…</span>
+    </form>
+    <form class="review-form" method="post" action="/jobs/{{ job.id }}/structure">
+      <div class="form-grid">
+        <label>招聘单位标准名称<input required name="employer_name" value="{{ ai_draft.employer_name if ai_draft else job.employer_name }}"></label>
+        <label>公告范围<select name="posting_scope"><option value="single_role" {% if (ai_draft and ai_draft.posting_scope == 'single_role') or (not ai_draft and job.posting_scope == 'single_role') %}selected{% endif %}>单一明确岗位</option><option value="multi_role_announcement" {% if ai_draft and ai_draft.posting_scope == 'multi_role_announcement' %}selected{% endif %}>多岗位招聘公告</option><option value="attachment_pending" {% if ai_draft and ai_draft.posting_scope == 'attachment_pending' %}selected{% endif %}>岗位明细在附件</option><option value="insufficient_information" {% if ai_draft and ai_draft.posting_scope == 'insufficient_information' %}selected{% endif %}>原文信息不足</option><option value="non_job_notice" {% if ai_draft and ai_draft.posting_scope == 'non_job_notice' %}selected{% endif %}>非具体岗位通知</option></select></label>
+        <label>附件核验状态<select name="attachment_status"><option value="not_required" {% if (ai_draft and ai_draft.attachment_status == 'not_required') or (not ai_draft and job.attachment_status == 'not_required') %}selected{% endif %}>无需附件</option><option value="pending" {% if ai_draft and ai_draft.attachment_status == 'pending' %}selected{% endif %}>待核验</option><option value="checked" {% if ai_draft and ai_draft.attachment_status == 'checked' %}selected{% endif %}>已核验</option></select></label>
+        <label>岗位名称<input required name="job_title" value="{{ ai_draft.job_title if ai_draft else job.job_title }}" placeholder="单一岗位填具体名称；多岗位可填公告名称"></label>
+        <label>岗位族<input required name="job_family" value="{{ ai_draft.job_family if ai_draft else job.job_family }}" placeholder="如：财务分析"></label>
+        <label>招聘类型<input required name="recruitment_type" value="{{ ai_draft.recruitment_type if ai_draft else job.recruitment_type }}" placeholder="实习 / 校招 / 初级社招"></label>
+        <label>地点分类<input required name="location_category" value="{{ job.location_category }}" placeholder="明确上海 / 全国"></label>
+        <label>工作地点<input required name="location_detail" value="{{ job.location_detail }}"></label>
+        <label>适合人群<select required name="target_audience"><option value="">请选择</option>{% for option in ['大三实习','大四/应届生','毕业两年内','社会人员','有工作经验人员','高级专业技术人员','需按具体岗位判断','原文未明确'] %}<option value="{{ option }}" {% if (ai_draft and ai_draft.target_audience == option) or (not ai_draft and job.target_audience == option) %}selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
+        <label>专业方向<input required name="direction_tags" value="{{ ai_draft.direction_tags if ai_draft else '' }}" placeholder="如：会计审计、金融银行"></label>
+        <label>截止日期<input name="deadline" value="{{ ai_draft.deadline if ai_draft else '' }}" placeholder="如：2026-09-30 或 招满即止；原文未写可留空"></label>
+        <label>官方公告链接（官方报名链接）<input required type="url" name="official_url" value="{{ ai_draft.official_url if ai_draft else '' }}" placeholder="必填：https://..."></label>
+        <label>投递方式<select name="application_method"><option value="official_page" {% if (ai_draft and ai_draft.application_method == 'official_page') or (not ai_draft and job.application_method == 'official_page') %}selected{% endif %}>官方页面投递</option><option value="email" {% if ai_draft and ai_draft.application_method == 'email' %}selected{% endif %}>邮件投递</option><option value="official_platform" {% if ai_draft and ai_draft.application_method == 'official_platform' %}selected{% endif %}>官方招聘平台</option><option value="on_site" {% if ai_draft and ai_draft.application_method == 'on_site' %}selected{% endif %}>现场报名</option><option value="other" {% if ai_draft and ai_draft.application_method == 'other' %}selected{% endif %}>其他官方方式</option><option value="unknown" {% if ai_draft and ai_draft.application_method == 'unknown' %}selected{% endif %}>原文未明确</option></select></label>
+        <label>报名邮箱/平台入口<input name="application_contact" value="{{ ai_draft.application_contact if ai_draft else job.application_contact }}" placeholder="邮件投递必填；其他方式可留空"></label>
+        <label>质量分（0-100）<input required type="number" min="0" max="100" name="quality_score" value="{{ job.quality_score if job.quality_score else 70 }}" placeholder="人工按来源、完整度、时效和学生匹配度评分"></label>
+      </div>
+      <p class="form-help">截止日期如原文未写，可留空；系统会记录为“公告未明确统一截止时间”，发布时提示同学尽快查看原文，不会虚构日期。</p>
+      <label>核验备注<textarea name="note" rows="3" placeholder="例如：已核对公告发布日期、投递入口、面向届别和报名安排。"></textarea></label>
+      <div class="button-group"><button class="button button-primary" type="submit">提交并进入待审核</button><a class="button button-secondary" href="/jobs/{{ job.id }}">暂不提交</a></div>
+    </form>
+  </section>
+  <aside class="detail-sidebar">
+    <section class="panel"><span class="eyebrow">SOURCE</span><h2>公开原文</h2><p>先打开原文核对信息，再填写左侧表单。</p><a class="button button-secondary" href="{{ job.source_url }}" target="_blank" rel="noopener">查看公开原文</a></section>
+    <section class="panel"><span class="eyebrow">EVIDENCE</span><h2>采集证据</h2><details class="evidence-details"><summary>展开采集原文</summary><blockquote>{{ job.evidence_text }}</blockquote></details></section>
+  </aside>
+</div>
+<script>
+  document.querySelectorAll('[data-ai-prefill-form]').forEach((form) => {
+    form.addEventListener('submit', () => {
+      const button = form.querySelector('[data-ai-prefill-button]');
+      const status = form.querySelector('[data-ai-prefill-status]');
+      if (button) {
+        button.disabled = true;
+        button.textContent = 'AI 处理中…';
+      }
+      form.setAttribute('aria-busy', 'true');
+      if (status) status.hidden = false;
+    });
+  });
+</script>
+{% endblock %}

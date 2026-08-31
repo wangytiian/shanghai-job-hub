@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}AI 模型配置 · 招聘内容运营工作台{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <span class="eyebrow">AI SETTINGS</span>
+  <h1>AI 模型配置</h1>
+  <p>配置仅保存在这台电脑。AI 只辅助生成草稿，不能绕过人工核验和发布流程。</p>
+</section>
+
+{% if setting.connection_status == 'ready' %}
+<div class="notice notice-success">连接正常{% if setting.last_tested_at %} · 最近测试：{{ setting.last_tested_at }}{% endif %}</div>
+{% elif setting.connection_status == 'error' %}
+<div class="notice notice-warning">配置或连接需要处理：{{ setting.last_error_summary }}</div>
+{% elif setting.connection_status == 'not_configured' %}
+<div class="notice notice-info">尚未保存 API Key。保存后可测试连接。</div>
+{% endif %}
+
+<div class="settings-grid">
+  <section class="panel settings-panel">
+    <span class="eyebrow">PROVIDER</span>
+    <h2>阿里云百炼 API Key</h2>
+    <p class="muted">密钥将保存到 Windows 凭据管理器，不会写入本系统数据库。</p>
+    {% if setting.key_masked %}<p class="safe-status">已安全配置：{{ setting.key_masked }}</p>{% endif %}
+    <form class="settings-form" method="post" action="/settings/ai/key">
+      <label>百炼 API Key<input type="password" name="api_key" autocomplete="new-password" placeholder="粘贴新的 API Key" required></label>
+      <button class="button button-primary" type="submit">安全保存</button>
+    </form>
+  </section>
+
+  <section class="panel settings-panel">
+    <span class="eyebrow">MODELS</span>
+    <h2>启用模型</h2>
+    <form class="settings-form" method="post" action="/settings/ai/models">
+      <label>文本解析模型<select name="text_model"><option value="qwen3.7-flash" {% if setting.text_model == 'qwen3.7-flash' %}selected{% endif %}>qwen3.7-flash</option></select></label>
+      <label class="check-label"><input type="checkbox" name="text_enabled" {% if setting.text_enabled %}checked{% endif %}> 启用文本解析</label>
+      <label>图片 / PDF 识别模型<select name="ocr_model"><option value="qwen-vl-ocr" {% if setting.ocr_model == 'qwen-vl-ocr' %}selected{% endif %}>qwen-vl-ocr</option></select></label>
+      <label class="check-label"><input type="checkbox" name="ocr_enabled" {% if setting.ocr_enabled %}checked{% endif %}> 启用图片和 PDF OCR</label>
+      <button class="button button-secondary" type="submit">保存模型设置</button>
+    </form>
+  </section>
+</div>
+
+<section class="panel settings-panel settings-test-panel">
+  <span class="eyebrow">CONNECTION CHECK</span>
+  <h2>测试连接</h2>
+  <p class="muted">系统会用 <strong>{{ setting.text_model }}</strong> 发送一个极短测试请求，只验证密钥、网络与模型是否可用。</p>
+  <form method="post" action="/settings/ai/test"><button class="button button-primary" type="submit">测试连接</button></form>
+</section>
+{% endblock %}

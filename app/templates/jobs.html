@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}岗位中心 · 招聘内容运营工作台{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <span class="eyebrow">JOB RECORDS</span>
+  <h1>岗位中心</h1>
+  <p>默认优先展示真实线索；演示数据只用于流程验证。</p>
+</section>
+
+{% if classification_feedback %}<div class="notice notice-success" role="status"><strong>公告分类已处理。</strong>{{ classification_feedback }}</div>{% endif %}
+
+{% if suggested_new_recruitment_count %}
+<section class="panel section-block batch-classification-panel">
+  <span class="eyebrow">BATCH CONFIRMATION</span>
+  <h2>系统建议的新招聘</h2>
+  <p>当前有 <strong>{{ suggested_new_recruitment_count }}</strong> 条真实待核验公告，规则明确建议为“新招聘”。此操作不会处理体检、面试、公示等招聘进度通知。</p>
+  <form method="post" action="/jobs/classification/confirm-suggestions" onsubmit="return confirm('确认将这 {{ suggested_new_recruitment_count }} 条系统建议的新招聘标记为“新招聘”吗？每条都会留下审核记录。');">
+    <button class="button button-primary" type="submit">批量确认 {{ suggested_new_recruitment_count }} 条系统建议的新招聘</button>
+  </form>
+</section>
+{% endif %}
+
+<form class="filter-panel" method="get" action="/jobs">
+  <label>数据属性<select name="data_type"><option value="real" {% if selected_data_type == 'real' %}selected{% endif %}>真实线索</option><option value="demo" {% if selected_data_type == 'demo' %}selected{% endif %}>演示数据</option><option value="all" {% if selected_data_type == 'all' %}selected{% endif %}>全部</option></select></label>
+  <label>处理状态<select name="status"><option value="">全部状态</option>{% for value in ['待核验','待审核','可发布','已发布','淘汰'] %}<option value="{{ value }}" {% if selected_status == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+  <label class="filter-search">单位或岗位<input name="query" value="{{ query }}" placeholder="输入关键词"></label>
+  <button class="button button-primary">筛选</button>
+</form>
+
+<div class="segment-tabs" aria-label="数据属性快速筛选">
+  <a href="/jobs?data_type=real" {% if selected_data_type == 'real' %}aria-current="page"{% endif %}>真实线索</a>
+  <a href="/jobs?data_type=demo" {% if selected_data_type == 'demo' %}aria-current="page"{% endif %}>演示数据</a>
+  <a href="/jobs?data_type=all" {% if selected_data_type == 'all' %}aria-current="page"{% endif %}>全部记录</a>
+</div>
+
+<div class="list-summary"><strong>{{ jobs|length }}</strong> 条结果</div>
+
+{% if jobs %}
+<div class="responsive-table desktop-only">
+  <table>
+    <thead><tr><th>单位 / 岗位</th><th>数据属性</th><th>类型</th><th>适合人群</th><th>质量</th><th>状态</th></tr></thead>
+    <tbody>{% for job in jobs %}<tr>
+      <td class="job-name"><a href="/jobs/{{ job.id }}">{{ job.employer_name }}<strong>{{ job.job_title }}</strong></a></td>
+      <td><span class="data-badge {% if job.is_demo %}data-demo{% else %}data-real{% endif %}">{% if job.is_demo %}演示数据{% else %}真实线索{% endif %}</span></td>
+      <td>{{ job.recruitment_type }}</td><td>{{ job.target_audience }}</td>
+      <td>{% if job.quality_score == 0 and job.status == '待核验' %}<span class="muted">未评分</span>{% else %}<strong>{{ job.quality_score }}</strong>{% endif %}</td>
+      <td><span class="status-badge">{{ job.status }}</span></td>
+    </tr>{% endfor %}</tbody>
+  </table>
+</div>
+<div class="job-card-list mobile-only">
+  {% for job in jobs %}<article class="job-card">
+    <div class="job-card-top"><span class="data-badge {% if job.is_demo %}data-demo{% else %}data-real{% endif %}">{% if job.is_demo %}演示数据{% else %}真实线索{% endif %}</span><span class="status-badge">{{ job.status }}</span></div>
+    <a class="job-card-title" href="/jobs/{{ job.id }}"><small>{{ job.employer_name }}</small><strong>{{ job.job_title }}</strong></a>
+    <dl><div><dt>类型</dt><dd>{{ job.recruitment_type }}</dd></div><div><dt>人群</dt><dd>{{ job.target_audience }}</dd></div><div><dt>质量</dt><dd>{% if job.quality_score == 0 and job.status == '待核验' %}未评分{% else %}{{ job.quality_score }}{% endif %}</dd></div></dl>
+  </article>{% endfor %}
+</div>
+{% else %}
+<div class="empty-panel"><strong>没有符合条件的岗位</strong><p>请调整数据属性、状态或搜索关键词。</p></div>
+{% endif %}
+{% endblock %}

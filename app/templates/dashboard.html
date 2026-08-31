@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page-heading page-heading-actions">
+  <div>
+    <span class="eyebrow">OPERATIONS OVERVIEW</span>
+    <h1>工作总览</h1>
+    <p>先处理真实招聘线索，再检查来源和内容队列。</p>
+  </div>
+  <form method="post" action="/tasks/daily-collection">
+    <button class="button button-primary">运行每日采集</button>
+  </form>
+</section>
+
+<div class="notice notice-warning">
+  每日采集只访问已启用的公开官网，所有线索都进入“待核验”，不会自动发布。
+</div>
+
+<section class="section-block">
+  <div class="section-heading">
+    <div><span class="eyebrow">PRIORITY</span><h2>今日待办</h2></div>
+    <a class="text-link" href="/jobs?data_type=real">进入真实岗位中心</a>
+  </div>
+  <div class="metric-grid metric-grid-priority">
+    <a class="metric-card priority" href="/jobs?data_type=real&status=待核验"><span>待核验线索</span><strong>{{ workflow_counts['待核验'] }}</strong><small>优先补齐事实与证据</small></a>
+    <a class="metric-card" href="/jobs?data_type=real&status=待审核"><span>待审核岗位</span><strong>{{ workflow_counts['待审核'] }}</strong><small>等待人工终审</small></a>
+    <a class="metric-card" href="/jobs?data_type=real&status=可发布"><span>可发布岗位</span><strong>{{ workflow_counts['可发布'] }}</strong><small>可生成渠道内容</small></a>
+    <a class="metric-card" href="/jobs?data_type=real"><span>真实线索总数</span><strong>{{ total_jobs }}</strong><small>演示记录不计入运营指标</small></a>
+  </div>
+</section>
+
+<div class="two-column-layout">
+  <section class="panel section-block">
+    <div class="section-heading"><div><span class="eyebrow">WORKFLOW</span><h2>流程状态</h2></div></div>
+    <div class="workflow-list">
+      {% for label in ['待核验', '待审核', '可发布', '已发布'] %}
+      <div><span class="status-badge status-{{ loop.index }}">{{ label }}</span><strong>{{ workflow_counts[label] }}</strong></div>
+      {% endfor %}
+    </div>
+  </section>
+  <section class="panel section-block">
+    <div class="section-heading"><div><span class="eyebrow">SOURCE HEALTH</span><h2>来源健康</h2></div><a class="text-link" href="/sources">查看来源</a></div>
+    <div class="health-list">
+      {% for label in ['正常', '异常', '暂停'] %}
+      <div><span class="health-dot health-{{ loop.index }}"></span><span>{{ label }}</span><strong>{{ source_health[label] }}</strong></div>
+      {% endfor %}
+    </div>
+  </section>
+</div>
+
+<div class="two-column-layout">
+  <section class="panel section-block">
+    <div class="section-heading"><div><span class="eyebrow">COLLECTION</span><h2>最近采集</h2></div></div>
+    <ul class="activity-list">
+      {% for item in task_runs %}<li><span class="activity-time">{{ item.created_at }}</span><strong>{{ item.task_name }}</strong><p>{{ item.message }}</p></li>{% else %}<li class="empty-state">暂无采集任务</li>{% endfor %}
+    </ul>
+  </section>
+  <section class="panel section-block">
+    <div class="section-heading"><div><span class="eyebrow">REVIEW</span><h2>最近审核</h2></div></div>
+    <ul class="activity-list">
+      {% for item in logs %}<li><span class="activity-time">{{ item.created_at }}</span><strong>岗位 #{{ item.job_id }} · {{ item.action }}</strong><p>{{ item.note or '未填写说明' }}</p></li>{% else %}<li class="empty-state">暂无审核记录</li>{% endfor %}
+    </ul>
+  </section>
+</div>
+
+<details class="developer-tools">
+  <summary>开发工具</summary>
+  <div><p>模拟数据仅用于验证审核和分发流程。</p><form method="post" action="/tasks/demo-collection"><button class="button button-secondary">运行模拟采集</button></form></div>
+</details>
+{% endblock %}

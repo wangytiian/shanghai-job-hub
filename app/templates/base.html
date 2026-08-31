@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}招聘内容运营工作台{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="app-sidebar">
+      <div class="brand">
+        <span class="brand-kicker">LIXIN CAREER OPS</span>
+        <strong>招聘内容运营工作台</strong>
+        <small>非官方就业信息服务</small>
+      </div>
+      <nav class="primary-nav" aria-label="主要导航">
+        <a href="/" {% if active_nav == 'dashboard' %}aria-current="page"{% endif %}>工作总览</a>
+        <span class="nav-disabled" title="第二批上线">公告中心<small>第二批</small></span>
+        <a href="/jobs" {% if active_nav == 'jobs' %}aria-current="page"{% endif %}>岗位中心</a>
+        <span class="nav-disabled" title="第二批上线">审核工作台<small>第二批</small></span>
+        <a href="/queues" {% if active_nav == 'queues' %}aria-current="page"{% endif %}>内容队列</a>
+        <a href="/sources" {% if active_nav == 'sources' %}aria-current="page"{% endif %}>来源监控</a>
+        <a href="/settings/ai" {% if active_nav == 'ai_settings' %}aria-current="page"{% endif %}>AI 模型配置</a>
+      </nav>
+      <div class="identity-note">
+        面向上海立信会计金融学院学生，不代表校方授权或背书。
+      </div>
+    </aside>
+
+    <div class="app-workspace">
+      <header class="app-topbar">
+        <div class="topbar-item"><span>运行环境</span><strong>本地环境</strong></div>
+        <div class="topbar-item"><span>待处理</span><strong>{{ global_status.pending_work_count }}</strong></div>
+        <div class="topbar-item"><span>异常来源</span><strong>{{ global_status.unhealthy_source_count }}</strong></div>
+        <div class="topbar-item topbar-time"><span>最后任务</span><strong>{{ global_status.last_task_at or '暂无记录' }}</strong></div>
+        <div class="topbar-user"><span>当前身份</span><strong>{{ global_status.operator_name }}</strong></div>
+      </header>
+
+      <main class="app-main">
+        {% block content %}{% endblock %}
+      </main>
+
+      <footer class="app-footer">
+        仅本机运行 · 真实线索必须人工核验 · 所有申请请以官方原文为准
+      </footer>
+    </div>
+  </div>
+</body>
+</html>

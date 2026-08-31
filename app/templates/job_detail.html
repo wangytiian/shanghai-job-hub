@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}{{ job.job_title }} · 岗位中心{% endblock %}
+{% block content %}
+<a class="back-link" href="/jobs?data_type={% if job.is_demo %}demo{% else %}real{% endif %}">← 返回岗位中心</a>
+<section class="page-heading job-detail-heading">
+  <div class="badge-row"><span class="data-badge {% if job.is_demo %}data-demo{% else %}data-real{% endif %}">{% if job.is_demo %}演示数据{% else %}真实线索{% endif %}</span><span class="status-badge">{{ job.status }}</span></div>
+  <h1>{{ job.employer_name }}<span>{{ job.job_title }}</span></h1>
+  <p>质量：{% if job.quality_score == 0 and job.status == '待核验' %}未评分{% else %}{{ job.quality_score }} 分{% endif %} · 版本 {{ job.version }}</p>
+  {% if parent_job %}<p><a class="button button-secondary" href="/jobs/{{ parent_job.id }}">来源公告：{{ parent_job.job_title }}</a></p>{% endif %}
+</section>
+
+{% if review_feedback %}<div class="notice {% if review_feedback_kind == 'success' %}notice-info{% else %}notice-warning{% endif %}"><strong>{% if review_feedback_kind == 'success' %}操作成功{% else %}需要补充信息{% endif %}：</strong>{{ review_feedback }}</div>{% endif %}
+
+{% if not job.is_demo and job.status != '可发布' %}<div class="notice notice-warning"><strong>尚未完成最终人工审核，不得对外发布。</strong>请核对下方公告范围、附件状态、投递方式和质量分。</div>{% elif not job.is_demo %}<div class="notice notice-info"><strong>已通过最终人工审核。</strong>生成内容前仍请检查官方公告是否有更新。</div>{% endif %}
+
+<div class="detail-layout">
+  <section class="panel detail-primary">
+    <div class="section-heading"><div><span class="eyebrow">FACTS</span><h2>事实与来源</h2></div></div>
+    {% set scope_labels = {'single_role': '单一明确岗位', 'multi_role_announcement': '多岗位招聘公告', 'attachment_pending': '岗位明细在附件', 'insufficient_information': '原文信息不足', 'non_job_notice': '非具体岗位通知'} %}
+    {% set attachment_labels = {'not_required': '无需附件', 'pending': '待核验', 'checked': '已核验'} %}
+    {% set application_labels = {'official_page': '官方页面投递', 'email': '邮件投递', 'official_platform': '官方招聘平台', 'on_site': '现场报名', 'other': '其他官方方式', 'unknown': '原文未明确'} %}
+    <dl class="fact-grid"><div><dt>招聘类型</dt><dd>{{ job.recruitment_type }}</dd></div><div><dt>公告范围</dt><dd>{{ scope_labels.get(job.posting_scope, '待判断') }}</dd></div><div><dt>附件核验</dt><dd>{{ attachment_labels.get(job.attachment_status, '待核验') }}</dd></div><div><dt>适合人群</dt><dd>{{ job.target_audience }}</dd></div><div><dt>专业方向</dt><dd>{{ job.direction_tags }}</dd></div><div><dt>工作地点</dt><dd>{{ job.location_detail }}</dd></div><div><dt>截止日期</dt><dd>{{ job.deadline }}</dd></div><div><dt>投递方式</dt><dd>{{ application_labels.get(job.application_method, '原文未明确') }}</dd></div>{% if job.application_contact %}<div><dt>报名邮箱/入口</dt><dd>{{ job.application_contact }}</dd></div>{% endif %}<div><dt>最终核验</dt><dd>{{ job.last_verified_at or '尚未最终通过' }}</dd></div><div><dt>采集时间</dt><dd>{{ job.collected_at or '演示初始化时间' }}</dd></div></dl>
+    <div class="source-actions"><a class="button button-secondary" href="{{ job.source_url }}" target="_blank" rel="noopener">查看公开原文</a>{% if job.official_url %}<a class="button button-secondary" href="{{ job.official_url }}" target="_blank" rel="noopener">查看官方入口</a>{% endif %}</div>
+    {% if attachments %}<div class="notice notice-info"><strong>官方附件（待人工核验）</strong><ul>{% for attachment in attachments %}<li><a href="{{ attachment.url }}" target="_blank" rel="noopener">{{ attachment.name }}</a>{% if attachment.is_xlsx and job.attachment_status == 'checked' %}<form method="post" action="/jobs/{{ job.id }}/attachments/parse" style="display:inline-block;margin-left:10px;"><input type="hidden" name="attachment_name" value="{{ attachment.name }}"><input type="hidden" name="attachment_url" value="{{ attachment.url }}"><button class="button button-secondary" type="submit">从附件拆分岗位</button></form>{% endif %}</li>{% endfor %}</ul></div>{% endif %}
+    {% if child_jobs %}<section class="panel section-block"><div class="section-heading"><div><span class="eyebrow">SPLIT ROLES</span><h2>已从本公告拆分的岗位</h2><p>待核验 {{ child_status_counts['待核验'] }} 条 · 待审核 {{ child_status_counts['待审核'] }} 条 · 可发布 {{ child_status_counts['可发布'] }} 条</p></div></div><ul class="activity-list">{% for child in child_jobs %}<li><strong><a href="/jobs/{{ child.id }}">{{ child.job_title }}</a></strong><p>{{ child.status }} · {{ child.direction_tags }} · {{ child.deadline }}</p>{% if child.status == '待核验' and child.notice_type == '新招聘' %}<a class="button button-secondary" href="/jobs/{{ child.id }}/structure">去结构化</a>{% elif child.status == '待审核' %}<a class="button button-secondary" href="/jobs/{{ child.id }}">去审核</a>{% elif child.status == '可发布' %}<a class="button button-secondary" href="/jobs/{{ child.id }}">查看发布内容</a>{% endif %}</li>{% endfor %}</ul></section>{% endif %}
+    <details class="evidence-details"><summary>查看完整采集原文</summary><blockquote>{{ job.evidence_text }}</blockquote></details>
+  </section>
+
+  <aside class="detail-sidebar">
+    <section class="panel"><span class="eyebrow">RISK</span><h2>风险与边界</h2><p>{{ job.risk_flags }}</p></section>
+    <section class="panel"><span class="eyebrow">NEXT ACTION</span><h2>下一步</h2>
+      {% if not job.is_demo and job.status == '待核验' %}
+        {% set suggestion = job.notice_type_suggestion if job.notice_type_suggestion != '待判断' else ('招聘进度通知' if '体检' in job.job_title or '面试' in job.job_title or '录用' in job.job_title or '公示' in job.job_title else '待判断') %}
+        <p>公告类型建议：<strong>{{ suggestion }}</strong>。请先确认类型。</p>
+        <form class="review-form" method="post" action="/jobs/{{ job.id }}/classification"><div class="button-group"><button class="button button-primary" name="notice_type" value="新招聘">确认为新招聘</button><button class="button button-secondary" name="notice_type" value="招聘进度通知">标记为招聘进度通知</button><button class="button button-danger" name="notice_type" value="非招聘信息">淘汰</button></div></form>
+        {% if job.notice_type == '新招聘' %}<p>已确认为新招聘，可继续补齐字段。</p><a class="button button-primary" href="/jobs/{{ job.id }}/structure">开始公告结构化</a>{% endif %}
+      {% endif %}
+      {% if job.status == '待审核' %}
+      <div class="notice {% if publish_errors %}notice-warning{% else %}notice-info{% endif %}"><strong>发布检查</strong>{% if publish_errors %}<p>当前还不能通过，请先处理：</p><ul>{% for error in publish_errors %}<li>{{ error }}</li>{% endfor %}</ul>{% else %}<p>全部发布条件已满足。选择“通过”原因后即可进入可发布状态。</p>{% endif %}</div>
+      <form class="review-form" method="post" action="/jobs/{{ job.id }}/review"><label>本次操作原因<select required name="note"><option value="">请选择操作原因</option><option value="已核对公开原文、官方入口、适合人群及报名安排，确认可发布">通过：关键招聘事实已核验，可发布</option><option value="缺少官方投递入口或招聘事项不明确，退回补充">退回：缺少官方入口或招聘事实</option><option value="岗位明细或附件尚未核验，退回补充">退回：附件或岗位明细待核验</option><option value="信息与原文存在冲突，退回人工复核">退回：信息冲突，需复核</option><option value="公告不属于可发布招聘信息，淘汰">淘汰：非招聘信息或不符合准入规则</option></select></label><label>补充说明（可选）<textarea name="extra_note" rows="2" placeholder="仅在需要补充具体原因时填写"></textarea></label><div class="button-group"><button class="button button-primary" name="action" value="approve">通过</button><button class="button button-secondary" name="action" value="return">退回</button><button class="button button-danger" name="action" value="reject">淘汰</button></div></form>{% endif %}
+      {% if job.status == '可发布' %}<form method="post" action="/jobs/{{ job.id }}/distribution"><button class="button button-primary">生成公众号和群消息</button></form>{% endif %}
+    </section>
+  </aside>
+</div>
+
+<section class="panel section-block"><div class="section-heading"><div><span class="eyebrow">AUDIT TRAIL</span><h2>审核历史</h2></div></div><ul class="activity-list">{% for item in logs %}<li><span class="activity-time">{{ item.created_at }}</span><strong>{{ item.operator_name }} · {{ item.action }}</strong><p>{{ item.note or '未填写说明' }}</p></li>{% else %}<li class="empty-state">暂无审核记录</li>{% endfor %}</ul></section>
+{% endblock %}

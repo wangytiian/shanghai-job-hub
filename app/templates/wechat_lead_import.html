@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}公众号招聘线索导入 · 招聘内容运营工作台{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <span class="eyebrow">WECHAT LEAD INTAKE</span>
+  <h1>公众号招聘线索导入</h1>
+  <p>来源：{{ source.name }}。只读取你粘贴的公开文章链接，不扫描公众号、不读取课程或社群内容。</p>
+</section>
+<div class="notice notice-info"><strong>发布边界：</strong>文章只会生成内部“待核验”线索。必须补充单位或政府官方原文和报名入口，才能进入后续审核。</div>
+{% if error %}<div class="notice notice-error"><strong>本次未导入：</strong>{{ error }}</div>{% endif %}
+<section class="panel form-panel">
+  <span class="eyebrow">PUBLIC ARTICLE URL</span>
+  <h2>粘贴公开文章链接</h2>
+  <form method="post" action="/sources/wechat-leads/import" class="stack-form">
+    <label>微信公众号文章链接
+      <input name="article_url" type="url" placeholder="https://mp.weixin.qq.com/s/..." required>
+    </label>
+    <p class="muted">系统只接受可公开访问的 mp.weixin.qq.com 文章链接。读取失败、正文过短或纯课程推广内容不会入库。</p>
+    <div class="button-row"><button class="button button-primary" type="submit">读取并创建待核验线索</button><a class="button button-secondary" href="/sources">返回来源监控</a></div>
+  </form>
+</section>
+{% endblock %}
