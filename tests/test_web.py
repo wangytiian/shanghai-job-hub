@@ -658,6 +658,20 @@ def test_structuring_page_renders_ai_loading_contract_and_error_feedback():
     assert "AI 暂时不可用" in response.text
 
 
+def test_ai_prefill_loading_indicator_is_reset_after_navigation_or_browser_restore():
+    app = create_app_with_fake_ai_settings()
+    job_id = _create_ai_ready_job(app)
+
+    response = TestClient(app).get(f"/jobs/{job_id}/structure")
+    stylesheet = (Path(__file__).resolve().parents[1] / "app" / "static" / "app.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert "window.addEventListener('pageshow'" in response.text
+    assert "status.hidden = true" in response.text
+    assert ".ai-prefill-status[hidden]{display:none!important}" in stylesheet
+
+
 def test_jobs_page_shows_batch_notice_confirmation_and_post_creates_audit_log():
     app = create_app("sqlite+pysqlite:///:memory:")
     with app.state.session_factory() as session:

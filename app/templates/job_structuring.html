@@ -53,6 +53,17 @@
   </aside>
 </div>
 <script>
+  const resetAiPrefillState = (form) => {
+    const button = form.querySelector('[data-ai-prefill-button]');
+    const status = form.querySelector('[data-ai-prefill-status]');
+    if (button) {
+      button.disabled = false;
+      button.textContent = 'AI 预填表单';
+    }
+    form.removeAttribute('aria-busy');
+    if (status) status.hidden = true;
+  };
+
   document.querySelectorAll('[data-ai-prefill-form]').forEach((form) => {
     form.addEventListener('submit', () => {
       const button = form.querySelector('[data-ai-prefill-button]');
@@ -64,6 +75,11 @@
       form.setAttribute('aria-busy', 'true');
       if (status) status.hidden = false;
     });
+    resetAiPrefillState(form);
+  });
+
+  window.addEventListener('pageshow', () => {
+    document.querySelectorAll('[data-ai-prefill-form]').forEach(resetAiPrefillState);
   });
 </script>
 {% endblock %}
