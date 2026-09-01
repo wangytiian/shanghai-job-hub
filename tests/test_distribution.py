@@ -31,6 +31,15 @@ def test_non_publishable_job_cannot_create_distribution_items(session, pending_r
         create_distribution_items(session, pending_review_job.id)
 
 
+def test_student_ineligible_job_cannot_create_distribution_items(session, pending_review_job):
+    pending_review_job.status = "可发布"
+    pending_review_job.distribution_recommendation = "不进入学生分发"
+    session.commit()
+
+    with pytest.raises(ValueError, match="不适合核心学生用户"):
+        create_distribution_items(session, pending_review_job.id)
+
+
 def test_wechat_draft_uses_inline_styles_and_keeps_official_facts(session, pending_review_job):
     draft = build_wechat_draft(pending_review_job)
 

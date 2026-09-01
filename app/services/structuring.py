@@ -25,6 +25,10 @@ class StructuringInput:
     application_contact: str = ""
     quality_score: int = 0
     note: str = ""
+    student_fit_level: str = "待人工判断"
+    distribution_recommendation: str = "仅保留资料库"
+    ai_rationale: str = ""
+    ai_confidence: str = "低"
 
 
 def _required(value: str, label: str) -> str:
@@ -53,6 +57,12 @@ def _validate_input(data: StructuringInput) -> None:
         raise ValueError("邮箱投递必须填写报名邮箱")
     if not 0 <= data.quality_score <= 100:
         raise ValueError("质量分必须在0到100之间")
+    if data.student_fit_level not in {"核心适配", "补充适配", "不适合核心学生用户", "待人工判断"}:
+        raise ValueError("学生适配选择无效")
+    if data.distribution_recommendation not in {"进入学生分发审核", "仅保留资料库", "不进入学生分发"}:
+        raise ValueError("分发建议选择无效")
+    if data.ai_confidence not in {"高", "中", "低"}:
+        raise ValueError("AI 判断置信度无效")
 
 
 def structure_job(
@@ -85,6 +95,10 @@ def structure_job(
         "attachment_status",
         "application_method",
         "application_contact",
+        "student_fit_level",
+        "distribution_recommendation",
+        "ai_rationale",
+        "ai_confidence",
     ):
         setattr(job, field_name, getattr(data, field_name).strip())
     job.deadline = normalized_deadline
@@ -97,6 +111,17 @@ def structure_job(
             job_id=job.id,
             action="结构化完成",
             note=data.note.strip(),
+            operator_name=operator_name,
+        )
+    )
+    session.add(
+        ReviewLog(
+            job_id=job.id,
+            action="AI建议已确认",
+            note=(
+                f"学生适配：{job.student_fit_level}；分发建议：{job.distribution_recommendation}；"
+                f"置信度：{job.ai_confidence}；依据：{job.ai_rationale}"
+            ),
             operator_name=operator_name,
         )
     )

@@ -565,6 +565,44 @@ def test_pending_verification_detail_links_to_structuring_not_final_approval():
     assert "公告结构化 · 第二批" not in response.text
 
 
+def test_detail_page_shows_student_fit_and_distribution_recommendation():
+    app = create_app("sqlite+pysqlite:///:memory:")
+    with app.state.session_factory() as session:
+        job = Job(
+            fingerprint="学生适配详情|公告|2026-09-01|上海|公告",
+            employer_name="上海测试单位",
+            job_title="教学科研人员",
+            job_family="教育科研",
+            recruitment_type="公开招聘",
+            location_category="明确上海",
+            location_detail="上海（具体地点以原文为准）",
+            target_audience="博士毕业生/博士后",
+            direction_tags="公共管理",
+            deadline="2026-12-31",
+            official_url="https://example.com/apply",
+            source_url="https://example.com/source",
+            evidence_text="原文要求博士后。",
+            quality_score=80,
+            is_demo=False,
+            risk_flags="待最终人工审核",
+            status="待审核",
+            notice_type="新招聘",
+            student_fit_level="不适合核心学生用户",
+            distribution_recommendation="不进入学生分发",
+            ai_rationale="原文要求博士后。",
+            ai_confidence="高",
+        )
+        session.add(job)
+        session.commit()
+        job_id = job.id
+
+    response = TestClient(app).get(f"/jobs/{job_id}")
+
+    assert "学生适配" in response.text
+    assert "不适合核心学生用户" in response.text
+    assert "不进入学生分发" in response.text
+
+
 def _create_ai_ready_job(app) -> int:
     with app.state.session_factory() as session:
         job = Job(

@@ -423,7 +423,7 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
             setting = service.get_setting(session)
             try:
                 content = service.bailian_client.complete(api_key, setting.text_model, build_structuring_prompt(job.job_title, job.source_url, job.evidence_text))
-                draft = parse_ai_draft(content)
+                draft = parse_ai_draft(content, job.evidence_text)
             except Exception as exc:
                 return RedirectResponse(
                     url=f"/jobs/{job_id}/structure?{urlencode({'ai_feedback': 'error', 'ai_message': 'AI 请求失败，请检查模型配置、账户额度和网络后重试；也可继续手工填写。'})}",
@@ -461,6 +461,10 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
         application_contact: str = Form(""),
         quality_score: int = Form(0),
         note: str = Form(""),
+        student_fit_level: str = Form("待人工判断"),
+        distribution_recommendation: str = Form("仅保留资料库"),
+        ai_rationale: str = Form(""),
+        ai_confidence: str = Form("低"),
     ):
         with get_session() as session:
             try:
@@ -484,6 +488,10 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
                         application_contact=application_contact,
                         quality_score=quality_score,
                         note=note,
+                        student_fit_level=student_fit_level,
+                        distribution_recommendation=distribution_recommendation,
+                        ai_rationale=ai_rationale,
+                        ai_confidence=ai_confidence,
                     ),
                     "本地管理员",
                 )

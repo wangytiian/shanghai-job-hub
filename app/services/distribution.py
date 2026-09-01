@@ -133,6 +133,8 @@ def create_distribution_items(session: Session, job_id: int) -> list[Distributio
         raise ValueError("岗位不存在")
     if job.status != "可发布":
         raise ValueError("只有可发布岗位可以生成分发内容")
+    if job.distribution_recommendation == "不进入学生分发":
+        raise ValueError("该岗位不适合核心学生用户，已保留资料库，不生成学生渠道内容")
     wanted = (("公众号", "公众号草稿", _public_article(job)), ("微信群", job.target_audience, _group_message(job)))
     items: list[DistributionItem] = []
     for channel, audience_group, content in wanted:

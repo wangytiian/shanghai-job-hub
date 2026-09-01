@@ -48,6 +48,10 @@ def _valid_input(**overrides) -> StructuringInput:
         "application_contact": "",
         "quality_score": 82,
         "note": "已按公开原文核验。",
+        "student_fit_level": "核心适配",
+        "distribution_recommendation": "进入学生分发审核",
+        "ai_rationale": "原文明确面向应届生。",
+        "ai_confidence": "高",
     }
     values.update(overrides)
     return StructuringInput(**values)
@@ -81,6 +85,26 @@ def test_structure_job_saves_fields_marks_pending_review_and_writes_log(session)
     assert result.quality_score == 82
     assert "待最终人工审核" in result.risk_flags
     assert session.query(ReviewLog).filter_by(job_id=job.id, action="结构化完成").count() == 1
+
+
+def test_structure_job_saves_student_routing_recommendation(session):
+    job = _pending_verification_job(session)
+
+    result = structure_job(
+        session,
+        job.id,
+        _valid_input(
+            student_fit_level="不适合核心学生用户",
+            distribution_recommendation="不进入学生分发",
+            ai_rationale="原文要求博士后。",
+            ai_confidence="高",
+        ),
+        "本地管理员",
+    )
+
+    assert result.student_fit_level == "不适合核心学生用户"
+    assert result.distribution_recommendation == "不进入学生分发"
+    assert session.query(ReviewLog).filter_by(job_id=job.id, action="AI建议已确认").count() == 1
 
 
 def test_structure_job_only_accepts_pending_verification_jobs(session):
