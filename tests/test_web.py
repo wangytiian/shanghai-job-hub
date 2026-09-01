@@ -1,5 +1,6 @@
 from pathlib import Path
 import subprocess
+from datetime import datetime
 
 from fastapi.testclient import TestClient
 
@@ -161,6 +162,41 @@ def test_jobs_can_separate_real_clues_from_demo_jobs():
     assert real_page.status_code == 200
     assert "示例金融集团" in demo_page.text
     assert "示例金融集团" not in real_page.text
+
+
+def test_real_jobs_page_shows_collection_time_for_each_real_clue():
+    app = create_app("sqlite+pysqlite:///:memory:")
+    with app.state.session_factory() as session:
+        session.add(
+            Job(
+                fingerprint="拉取时间列表|岗位|2026-09-01|上海|公告",
+                employer_name="时间展示测试单位",
+                job_title="招聘专员",
+                job_family="综合职能",
+                recruitment_type="初级社招",
+                location_category="明确上海",
+                location_detail="上海",
+                target_audience="毕业两年内",
+                direction_tags="工商运营",
+                deadline="招满即止",
+                official_url="https://example.com/apply",
+                source_url="https://example.com/source",
+                evidence_text="公开招聘原文证据。",
+                quality_score=75,
+                risk_flags="待人工核验",
+                is_demo=False,
+                collected_at=datetime(2026, 9, 1, 16, 30),
+                status="待核验",
+                notice_type="新招聘",
+            )
+        )
+        session.commit()
+
+    response = TestClient(app).get("/jobs?data_type=real")
+
+    assert response.status_code == 200
+    assert "拉取时间" in response.text
+    assert "2026-09-01 16:30" in response.text
 
 
 def test_jobs_reject_invalid_data_type():

@@ -38,11 +38,12 @@
 {% if jobs %}
 <div class="responsive-table desktop-only">
   <table>
-    <thead><tr><th>单位 / 岗位</th><th>数据属性</th><th>类型</th><th>适合人群</th><th>质量</th><th>状态</th></tr></thead>
+    <thead><tr><th>单位 / 岗位</th><th>数据属性</th><th>类型</th><th>适合人群</th><th>拉取时间</th><th>质量</th><th>状态</th></tr></thead>
     <tbody>{% for job in jobs %}<tr>
       <td class="job-name"><a href="/jobs/{{ job.id }}">{{ job.employer_name }}<strong>{{ job.job_title }}</strong></a></td>
       <td><span class="data-badge {% if job.is_demo %}data-demo{% else %}data-real{% endif %}">{% if job.is_demo %}演示数据{% else %}真实线索{% endif %}</span></td>
       <td>{{ job.recruitment_type }}</td><td>{{ job.target_audience }}</td>
+      <td>{% if job.is_demo %}<span class="muted">演示初始化</span>{% elif job.collected_at %}{{ job.collected_at.strftime('%Y-%m-%d %H:%M') }}{% else %}<span class="muted">未记录</span>{% endif %}</td>
       <td>{% if job.quality_score == 0 and job.status == '待核验' %}<span class="muted">未评分</span>{% else %}<strong>{{ job.quality_score }}</strong>{% endif %}</td>
       <td><span class="status-badge">{{ job.status }}</span></td>
     </tr>{% endfor %}</tbody>
@@ -52,7 +53,7 @@
   {% for job in jobs %}<article class="job-card">
     <div class="job-card-top"><span class="data-badge {% if job.is_demo %}data-demo{% else %}data-real{% endif %}">{% if job.is_demo %}演示数据{% else %}真实线索{% endif %}</span><span class="status-badge">{{ job.status }}</span></div>
     <a class="job-card-title" href="/jobs/{{ job.id }}"><small>{{ job.employer_name }}</small><strong>{{ job.job_title }}</strong></a>
-    <dl><div><dt>类型</dt><dd>{{ job.recruitment_type }}</dd></div><div><dt>人群</dt><dd>{{ job.target_audience }}</dd></div><div><dt>质量</dt><dd>{% if job.quality_score == 0 and job.status == '待核验' %}未评分{% else %}{{ job.quality_score }}{% endif %}</dd></div></dl>
+    <dl><div><dt>类型</dt><dd>{{ job.recruitment_type }}</dd></div><div><dt>人群</dt><dd>{{ job.target_audience }}</dd></div><div><dt>拉取时间</dt><dd>{% if job.is_demo %}演示初始化{% elif job.collected_at %}{{ job.collected_at.strftime('%Y-%m-%d %H:%M') }}{% else %}未记录{% endif %}</dd></div><div><dt>质量</dt><dd>{% if job.quality_score == 0 and job.status == '待核验' %}未评分{% else %}{{ job.quality_score }}{% endif %}</dd></div></dl>
   </article>{% endfor %}
 </div>
 {% else %}
