@@ -33,10 +33,21 @@ def test_non_publishable_job_cannot_create_distribution_items(session, pending_r
 
 def test_student_ineligible_job_cannot_create_distribution_items(session, pending_review_job):
     pending_review_job.status = "可发布"
+    pending_review_job.intake_grade = "B"
     pending_review_job.distribution_recommendation = "不进入学生分发"
     session.commit()
 
     with pytest.raises(ValueError, match="不适合核心学生用户"):
+        create_distribution_items(session, pending_review_job.id)
+
+
+@pytest.mark.parametrize("grade", ["C", "D"])
+def test_only_ab_intake_grades_can_enter_student_distribution(session, pending_review_job, grade):
+    pending_review_job.status = "可发布"
+    pending_review_job.intake_grade = grade
+    session.commit()
+
+    with pytest.raises(ValueError, match="A/B"):
         create_distribution_items(session, pending_review_job.id)
 
 

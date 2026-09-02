@@ -603,6 +603,44 @@ def test_detail_page_shows_student_fit_and_distribution_recommendation():
     assert "不进入学生分发" in response.text
 
 
+def test_detail_page_shows_intake_abcd_grade_and_reason():
+    app = create_app("sqlite+pysqlite:///:memory:")
+    with app.state.session_factory() as session:
+        job = Job(
+            fingerprint="入库分级详情|公告|2026-09-02|上海|公告",
+            employer_name="上海测试单位",
+            job_title="体检通知",
+            job_family="待分类",
+            recruitment_type="待核验",
+            location_category="明确上海",
+            location_detail="上海",
+            target_audience="待人工判断",
+            direction_tags="待人工分类",
+            deadline="公告未明确统一截止时间",
+            official_url="https://example.com/apply",
+            source_url="https://example.com/source",
+            evidence_text="请参加体检。",
+            quality_score=0,
+            is_demo=False,
+            risk_flags="需人工处理",
+            status="待核验",
+            intake_grade="D",
+            intake_route="过滤留档",
+            intake_reason="招聘进度通知，不进入学生岗位库",
+            intake_evidence="体检通知",
+            intake_confidence="高",
+        )
+        session.add(job)
+        session.commit()
+        job_id = job.id
+
+    response = TestClient(app).get(f"/jobs/{job_id}")
+
+    assert "入库分级" in response.text
+    assert "D｜不进入学生岗位库" in response.text
+    assert "招聘进度通知，不进入学生岗位库" in response.text
+
+
 def _create_ai_ready_job(app) -> int:
     with app.state.session_factory() as session:
         job = Job(

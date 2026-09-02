@@ -91,6 +91,11 @@ def seed_demo_data(session) -> SeedResult:
                     risk_flags="演示数据，不代表真实招聘",
                     is_demo=True,
                     status=status,
+                    intake_grade="A",
+                    intake_route="优先待核验",
+                    intake_reason="演示岗位：实习、校招或毕业两年内初级岗位",
+                    intake_evidence="演示数据",
+                    intake_confidence="高",
                 )
             )
             created_jobs += 1
