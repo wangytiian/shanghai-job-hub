@@ -1,4 +1,7 @@
+from datetime import date
+
 from app.models import Job
+from app.services.deadline_policy import job_application_deadline
 
 
 UNSPECIFIED_DEADLINE = "公告未明确统一截止时间"
@@ -16,7 +19,7 @@ PLACEHOLDER_VALUES = {
 }
 
 
-def validate_publishable(job: Job) -> list[str]:
+def validate_publishable(job: Job, today: date | None = None) -> list[str]:
     errors: list[str] = []
     if not job.source_url.strip():
         errors.append("缺少来源链接")
@@ -40,4 +43,7 @@ def validate_publishable(job: Job) -> list[str]:
         errors.append("缺少明确岗位名称")
     if job.application_method == "email" and not job.application_contact.strip():
         errors.append("缺少报名邮箱")
+    deadline = job_application_deadline(job)
+    if deadline is not None and deadline < (today or date.today()):
+        errors.append("报名已截止")
     return errors

@@ -39,6 +39,7 @@ from app.services.notice_classification import (
 from app.services.tasks import run_demo_collection
 from app.services.wechat_leads import import_public_wechat_article
 from app.services.publication_safety import return_unsafe_publishable_jobs
+from app.services.deadline_policy import expire_known_deadline_jobs
 from app.services.attachment_parser import create_pending_child_jobs, parse_xlsx_role_candidates
 from app.services.intake_backfill import backfill_unscreened_intake_jobs
 
@@ -56,6 +57,7 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
         seed_demo_data(session)
         ensure_official_source_catalog(session)
         backfill_unscreened_intake_jobs(session)
+        expire_known_deadline_jobs(session)
         return_unsafe_publishable_jobs(session)
     app.state.session_factory = session_factory
     app.state.ai_settings_service = AiSettingsService(WindowsCredentialStore())
@@ -421,6 +423,8 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
                 statement = statement.where(Job.is_demo.is_(True))
             if status:
                 statement = statement.where(Job.status == status)
+            elif data_type == "real":
+                statement = statement.where(Job.status != "已截止")
             if intake_grade:
                 if intake_grade not in {"A", "B", "C", "D"}:
                     raise HTTPException(400, "入库分级筛选无效")

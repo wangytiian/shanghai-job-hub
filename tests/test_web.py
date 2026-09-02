@@ -247,6 +247,43 @@ def test_default_real_jobs_hides_d_grade_but_allows_audit_filter():
     assert "D级留档单位" in audit_page.text
 
 
+def test_default_real_jobs_hides_expired_records_but_allows_expiry_audit_filter():
+    app = create_app("sqlite+pysqlite:///:memory:")
+    with app.state.session_factory() as session:
+        session.add(
+            Job(
+                fingerprint="过期筛选|岗位|2026-06-18|上海|公告",
+                employer_name="已截止测试单位",
+                job_title="已截止岗位",
+                job_family="综合职能",
+                recruitment_type="校园招聘",
+                location_category="明确上海",
+                location_detail="上海",
+                target_audience="大四/应届生",
+                direction_tags="综合职能",
+                deadline="2026-06-18",
+                official_url="https://example.com/apply",
+                source_url="https://example.com/source",
+                evidence_text="报名时间：2026年6月8日起至2026年6月18日",
+                quality_score=70,
+                risk_flags="已截止",
+                is_demo=False,
+                status="已截止",
+                lifecycle_status="已截止",
+                intake_grade="A",
+                intake_route="优先待核验",
+            )
+        )
+        session.commit()
+    client = TestClient(app)
+
+    default_page = client.get("/jobs?data_type=real")
+    expired_page = client.get("/jobs?data_type=real&status=已截止")
+
+    assert "已截止测试单位" not in default_page.text
+    assert "已截止测试单位" in expired_page.text
+
+
 def test_real_jobs_page_shows_collection_time_for_each_real_clue():
     app = create_app("sqlite+pysqlite:///:memory:")
     with app.state.session_factory() as session:

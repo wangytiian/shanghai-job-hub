@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Job, Source, TaskRun
 from app.services.intake_screening import screen_intake, screen_intake_with_ai
+from app.services.deadline_policy import extract_application_deadline, mark_job_expired
 from app.services.collection_strategy import build_collection_plan
 from app.services.source_library import can_auto_collect
 from app.sources.catalog import ensure_official_source_catalog
@@ -105,6 +106,11 @@ def _save_detail(
     identity_key = getattr(detail, "identity_key", detail.title)
     fingerprint = f"{source.name}|{identity_key}|{detail.published_at}|{source.scope_group}|公告"
     job = session.scalar(select(Job).where(Job.fingerprint == fingerprint))
+    extracted_deadline = extract_application_deadline(detail.evidence_text)
+    if extracted_deadline is not None and extracted_deadline < collected_now.date():
+        if job is not None:
+            mark_job_expired(job, extracted_deadline)
+        return "expired"
     attachment_links = _attachment_links(detail)
     content_fingerprint = _content_fingerprint(f"{detail.evidence_text}\n{attachment_links}")
     if job is None:
@@ -124,7 +130,9 @@ def _save_detail(
                 location_detail=getattr(detail, "location_detail", "以公告原文为准"),
                 target_audience="待人工判断",
                 direction_tags="待人工分类",
-                deadline=getattr(detail, "deadline", "原文待人工确认"),
+                deadline=getattr(detail, "deadline", "") or (
+                    extracted_deadline.isoformat() if extracted_deadline else "原文待人工确认"
+                ),
                 official_url=getattr(detail, "official_url", ""),
                 source_url=detail.detail_url,
                 evidence_text=detail.evidence_text,
@@ -300,6 +308,12 @@ def collect_shanghai_sasac(
                 fingerprint = f"上海市国资委|{detail.title}|{detail.published_at}|上海|公告"
                 job = session.scalar(select(Job).where(Job.fingerprint == fingerprint))
                 content_fingerprint = _content_fingerprint(detail.evidence_text)
+                extracted_deadline = extract_application_deadline(detail.evidence_text)
+                if extracted_deadline is not None and extracted_deadline < collected_now.date():
+                    if job is not None:
+                        mark_job_expired(job, extracted_deadline)
+                    unchanged_jobs += 1
+                    continue
                 if job is None:
                     intake = (
                         screen_intake_with_ai(detail.title, detail.evidence_text, intake_ai_complete)
@@ -317,7 +331,7 @@ def collect_shanghai_sasac(
                             location_detail="上海（公告来源）",
                             target_audience="待人工判断",
                             direction_tags="待人工分类",
-                            deadline="原文待人工确认",
+                            deadline=extracted_deadline.isoformat() if extracted_deadline else "原文待人工确认",
                             official_url="",
                             source_url=detail.detail_url,
                             evidence_text=detail.evidence_text,

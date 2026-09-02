@@ -61,6 +61,22 @@ def test_changed_notice_marks_real_clue_as_updated_and_pending_verification(sess
     assert "原文内容发生变化" in refreshed_job.last_change_summary
 
 
+def test_collection_skips_notice_with_explicitly_expired_registration_window(session):
+    class ExpiredDateClient(FakeClient):
+        def get(self, url, **kwargs):
+            response = super().get(url, **kwargs)
+            if not url.endswith("cqzp/"):
+                response.text += "<p>报名时间：2026年6月8日起至2026年6月18日</p>"
+            return response
+
+    result = collect_shanghai_sasac(
+        session, ExpiredDateClient(), limit=1, now=datetime(2026, 9, 2, 9, 0)
+    )
+
+    assert result.created_jobs == 0
+    assert session.query(Job).filter_by(is_demo=False).count() == 0
+
+
 def test_three_whole_source_failures_pause_source_and_success_resets_counter(session):
     class FailingClient:
         def get(self, url, **kwargs):
