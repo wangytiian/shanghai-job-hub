@@ -22,6 +22,7 @@
 
 <form class="filter-panel" method="get" action="/jobs">
   <label>数据属性<select name="data_type"><option value="real" {% if selected_data_type == 'real' %}selected{% endif %}>真实线索</option><option value="demo" {% if selected_data_type == 'demo' %}selected{% endif %}>演示数据</option><option value="all" {% if selected_data_type == 'all' %}selected{% endif %}>全部</option></select></label>
+  <label>入库初筛<select name="intake_grade"><option value="">全部分级</option><option value="A" {% if selected_intake_grade == 'A' %}selected{% endif %}>A｜优先待核验</option><option value="B" {% if selected_intake_grade == 'B' %}selected{% endif %}>B｜普通待核验</option><option value="C" {% if selected_intake_grade == 'C' %}selected{% endif %}>C｜人工复核</option><option value="D" {% if selected_intake_grade == 'D' %}selected{% endif %}>D｜过滤留档</option></select></label>
   <label>处理状态<select name="status"><option value="">全部状态</option>{% for value in ['待核验','待审核','可发布','已发布','淘汰'] %}<option value="{{ value }}" {% if selected_status == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
   <label class="filter-search">单位或岗位<input name="query" value="{{ query }}" placeholder="输入关键词"></label>
   <button class="button button-primary">筛选</button>

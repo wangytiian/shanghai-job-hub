@@ -332,6 +332,7 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
         request: Request,
         status: str = "",
         data_type: str = "real",
+        intake_grade: str = "",
         query: str = "",
         classification_feedback: str = "",
     ):
@@ -345,6 +346,10 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
                 statement = statement.where(Job.is_demo.is_(True))
             if status:
                 statement = statement.where(Job.status == status)
+            if intake_grade:
+                if intake_grade not in {"A", "B", "C", "D"}:
+                    raise HTTPException(400, "入库分级筛选无效")
+                statement = statement.where(Job.intake_grade == intake_grade)
             normalized_query = query.strip()
             if normalized_query:
                 statement = statement.where(
@@ -367,6 +372,7 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
                     "jobs",
                     jobs=job_records,
                     selected_status=status,
+                    selected_intake_grade=intake_grade,
                     selected_data_type=data_type,
                     query=normalized_query,
                     suggested_new_recruitment_count=suggested_new_recruitment_count,

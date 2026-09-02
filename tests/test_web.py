@@ -164,6 +164,42 @@ def test_jobs_can_separate_real_clues_from_demo_jobs():
     assert "示例金融集团" not in real_page.text
 
 
+def test_jobs_can_filter_by_intake_abcd_grade():
+    app = create_app("sqlite+pysqlite:///:memory:")
+    with app.state.session_factory() as session:
+        session.add(
+            Job(
+                fingerprint="分级筛选|C级|2026-09-02|上海|公告",
+                employer_name="C级复核单位",
+                job_title="待确认公告",
+                job_family="待分类",
+                recruitment_type="待核验",
+                location_category="地区待定",
+                location_detail="以公告原文为准",
+                target_audience="待人工判断",
+                direction_tags="待人工分类",
+                deadline="公告未明确统一截止时间",
+                official_url="https://example.com/apply",
+                source_url="https://example.com/source",
+                evidence_text="公开原文证据。",
+                quality_score=0,
+                risk_flags="待人工复核",
+                is_demo=True,
+                status="待核验",
+                intake_grade="C",
+                intake_route="人工复核",
+            )
+        )
+        session.commit()
+    client = TestClient(app)
+
+    response = client.get("/jobs?data_type=demo&intake_grade=A")
+
+    assert response.status_code == 200
+    assert "示例金融集团" in response.text
+    assert "C级复核单位" not in response.text
+
+
 def test_real_jobs_page_shows_collection_time_for_each_real_clue():
     app = create_app("sqlite+pysqlite:///:memory:")
     with app.state.session_factory() as session:
