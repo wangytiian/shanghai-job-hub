@@ -12,6 +12,20 @@ def test_second_demo_collection_does_not_duplicate_jobs(session):
     assert session.query(Job).count() == 10
 
 
+def test_demo_collection_backfills_abcd_grade_for_existing_demo_records(session):
+    run_demo_collection(session)
+    job = session.query(Job).first()
+    job.intake_grade = ""
+    job.intake_route = ""
+    job.intake_reason = ""
+    session.commit()
+
+    run_demo_collection(session)
+
+    assert job.intake_grade == "A"
+    assert job.intake_route == "优先待核验"
+
+
 def test_publishable_job_creates_public_article_and_matching_group_message(session, pending_review_job):
     pending_review_job.status = "可发布"
     session.commit()

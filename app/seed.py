@@ -100,6 +100,12 @@ def seed_demo_data(session) -> SeedResult:
             )
             created_jobs += 1
         else:
+            if not job.intake_grade:
+                job.intake_grade = "A"
+                job.intake_route = "优先待核验"
+                job.intake_reason = "演示岗位：实习、校招或毕业两年内初级岗位"
+                job.intake_evidence = "演示数据"
+                job.intake_confidence = "高"
             job.version += 1
             job.updated_at = datetime.now()
             updated_jobs += 1
