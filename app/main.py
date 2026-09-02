@@ -33,6 +33,7 @@ from app.services.tasks import run_demo_collection
 from app.services.wechat_leads import import_public_wechat_article
 from app.services.publication_safety import return_unsafe_publishable_jobs
 from app.services.attachment_parser import create_pending_child_jobs, parse_xlsx_role_candidates
+from app.services.intake_backfill import backfill_unscreened_intake_jobs
 
 APP_DIR = Path(__file__).parent
 DATA_DIR = APP_DIR.parent / "data"
@@ -47,6 +48,7 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
     with session_factory() as session:
         seed_demo_data(session)
         ensure_official_source_catalog(session)
+        backfill_unscreened_intake_jobs(session)
         return_unsafe_publishable_jobs(session)
     app.state.session_factory = session_factory
     app.state.ai_settings_service = AiSettingsService(WindowsCredentialStore())
