@@ -293,7 +293,11 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
         return RedirectResponse(f"/jobs/{job.id}", status_code=303)
 
     @app.get("/settings/ai")
-    def ai_settings(request: Request):
+    def ai_settings(
+        request: Request,
+        test_provider: str = "",
+        test_result: str = "",
+    ):
         with get_session() as session:
             bailian_setting, openai_setting = get_ai_settings_service().get_all_settings(session)
             return templates.TemplateResponse(
@@ -305,6 +309,8 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
                     setting=bailian_setting,
                     bailian_setting=bailian_setting,
                     openai_setting=openai_setting,
+                    test_provider=test_provider,
+                    test_result=test_result,
                 ),
             )
 
@@ -347,13 +353,16 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
     def test_ai_connection():
         with get_session() as session:
             try:
-                get_ai_settings_service().test_connection(session)
+                setting = get_ai_settings_service().test_connection(session)
             except CredentialNotConfiguredError as exc:
                 setting = get_ai_settings_service().get_setting(session)
                 setting.connection_status = "not_configured"
                 setting.last_error_summary = str(exc)[:300]
                 session.commit()
-        return RedirectResponse("/settings/ai", status_code=303)
+        result = "success" if setting.connection_status == "ready" else "error"
+        return RedirectResponse(
+            f"/settings/ai?test_provider=bailian&test_result={result}", status_code=303
+        )
 
     @app.post("/settings/ai/openai")
     def save_openai_ai_settings(
@@ -384,13 +393,17 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
     def test_openai_ai_connection():
         with get_session() as session:
             try:
-                get_ai_settings_service().test_connection(session, OPENAI_COMPATIBLE_PROVIDER)
+                setting = get_ai_settings_service().test_connection(session, OPENAI_COMPATIBLE_PROVIDER)
             except (CredentialNotConfiguredError, TextProviderNotReadyError) as exc:
                 setting = get_ai_settings_service().get_setting(session, OPENAI_COMPATIBLE_PROVIDER)
                 setting.connection_status = "not_configured"
                 setting.last_error_summary = str(exc)[:300]
                 session.commit()
-        return RedirectResponse("/settings/ai", status_code=303)
+        result = "success" if setting.connection_status == "ready" else "error"
+        return RedirectResponse(
+            f"/settings/ai?test_provider={OPENAI_COMPATIBLE_PROVIDER}&test_result={result}",
+            status_code=303,
+        )
 
     @app.post("/settings/ai/active")
     def set_active_ai_provider(provider: str = Form()):

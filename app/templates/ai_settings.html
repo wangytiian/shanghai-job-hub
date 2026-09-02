@@ -22,6 +22,10 @@
     <span class="eyebrow">PROVIDER 01</span>
     <h2>阿里云百炼 / Qwen</h2>
     <p class="muted">密钥保存到 Windows 凭据管理器，不会写入系统数据库。</p>
+    {% if test_provider == 'bailian' %}
+      {% if test_result == 'success' %}<div class="notice notice-success ai-test-result" role="status"><strong>测试成功。</strong>{{ bailian_setting.text_model }} 可以使用{% if bailian_setting.last_tested_at %} · 测试时间 {{ bailian_setting.last_tested_at }}{% endif %}</div>
+      {% else %}<div class="notice notice-error ai-test-result" role="alert"><strong>测试未完成。</strong>{{ bailian_setting.last_error_summary or '请检查 API Key、模型配置、额度或网络后重试。' }}</div>{% endif %}
+    {% endif %}
     {% if bailian_setting.key_masked %}<p class="safe-status">已安全配置：{{ bailian_setting.key_masked }}</p>{% endif %}
     {% if bailian_setting.connection_status == 'ready' %}<p class="safe-status">连接正常{% if bailian_setting.last_tested_at %} · {{ bailian_setting.last_tested_at }}{% endif %}</p>{% elif bailian_setting.connection_status == 'error' %}<p class="notice notice-warning">连接需要处理：{{ bailian_setting.last_error_summary }}</p>{% endif %}
     <form class="settings-form" method="post" action="/settings/ai/key">
@@ -35,13 +39,17 @@
       <label class="check-label"><input type="checkbox" name="ocr_enabled" {% if bailian_setting.ocr_enabled %}checked{% endif %}> 启用图片和 PDF OCR</label>
       <button class="button button-secondary" type="submit">保存 Qwen 设置</button>
     </form>
-    <form method="post" action="/settings/ai/test"><button class="button button-secondary" type="submit">测试 Qwen 连接</button></form>
+    <form data-ai-test-form method="post" action="/settings/ai/test"><button data-ai-test-button class="button button-secondary" type="submit">测试 Qwen 连接</button><span class="ai-test-loading" hidden>正在测试，请稍候…</span></form>
   </section>
 
   <section class="panel settings-panel">
     <span class="eyebrow">PROVIDER 02</span>
     <h2>GPT / OpenAI 兼容中转 API</h2>
     <p class="muted">适用于你现有的 OpenAI 兼容中转站。填写 Base URL 到 <code>/v1</code> 即可，系统会自动补上 <code>/chat/completions</code>。</p>
+    {% if test_provider == 'openai_compatible' %}
+      {% if test_result == 'success' %}<div class="notice notice-success ai-test-result" role="status"><strong>测试成功。</strong>{{ openai_setting.text_model }} 可以使用{% if openai_setting.last_tested_at %} · 测试时间 {{ openai_setting.last_tested_at }}{% endif %}{% if openai_setting.is_active_text_provider %} · 已设为当前文本模型{% endif %}</div>
+      {% else %}<div class="notice notice-error ai-test-result" role="alert"><strong>测试未完成。</strong>{{ openai_setting.last_error_summary or '请检查中转地址、模型名、API Key、额度或网络后重试。' }}</div>{% endif %}
+    {% endif %}
     {% if openai_setting.key_masked %}<p class="safe-status">已安全配置：{{ openai_setting.key_masked }}</p>{% endif %}
     {% if openai_setting.connection_status == 'ready' %}<p class="safe-status">连接正常{% if openai_setting.last_tested_at %} · {{ openai_setting.last_tested_at }}{% endif %}</p>{% elif openai_setting.connection_status == 'error' %}<p class="notice notice-warning">连接需要处理：{{ openai_setting.last_error_summary }}</p>{% endif %}
     <form class="settings-form" method="post" action="/settings/ai/openai">
@@ -52,7 +60,25 @@
       <label class="check-label"><input type="checkbox" name="make_active" {% if openai_setting.is_active_text_provider %}checked{% endif %}> 保存后设为当前文本模型</label>
       <button class="button button-primary" type="submit">安全保存 GPT 设置</button>
     </form>
-    <form method="post" action="/settings/ai/openai/test"><button class="button button-secondary" type="submit">测试 GPT 中转连接</button></form>
+    <form data-ai-test-form method="post" action="/settings/ai/openai/test"><button data-ai-test-button class="button button-secondary" type="submit">测试 GPT 中转连接</button><span class="ai-test-loading" hidden>正在测试，请稍候…</span></form>
   </section>
 </div>
+<script>
+  document.querySelectorAll('[data-ai-test-form]').forEach((form) => {
+    const button = form.querySelector('[data-ai-test-button]');
+    const loading = form.querySelector('.ai-test-loading');
+    const reset = () => {
+      button.disabled = false;
+      button.textContent = button.dataset.defaultText || button.textContent;
+      loading.hidden = true;
+    };
+    button.dataset.defaultText = button.textContent;
+    form.addEventListener('submit', () => {
+      button.disabled = true;
+      button.textContent = '正在测试…';
+      loading.hidden = false;
+    });
+    window.addEventListener('pageshow', reset);
+  });
+</script>
 {% endblock %}

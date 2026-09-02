@@ -131,6 +131,29 @@ def test_ai_settings_test_connection_redirects_to_settings_page():
     assert "连接正常" in page.text
 
 
+def test_ai_settings_connection_test_returns_provider_specific_success_feedback():
+    client = TestClient(create_app_with_fake_ai_settings())
+    client.post("/settings/ai/key", data={"api_key": "sk-private-browser-key-ABCD"})
+
+    response = client.post("/settings/ai/test", follow_redirects=False)
+    page = client.get(response.headers["location"])
+
+    assert response.status_code == 303
+    assert "test_provider=bailian" in response.headers["location"]
+    assert "test_result=success" in response.headers["location"]
+    assert "测试成功" in page.text
+    assert "qwen3.7-flash" in page.text
+
+
+def test_ai_settings_page_contains_connection_test_loading_feedback():
+    client = TestClient(create_app_with_fake_ai_settings())
+
+    response = client.get("/settings/ai")
+
+    assert 'data-ai-test-form' in response.text
+    assert "正在测试，请稍候" in response.text
+
+
 def test_sources_navigation_marks_current_page():
     client = TestClient(create_app("sqlite+pysqlite:///:memory:"))
 
