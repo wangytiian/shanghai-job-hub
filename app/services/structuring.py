@@ -31,11 +31,12 @@ class StructuringInput:
     ai_confidence: str = "低"
 
 
-def _required(value: str, label: str) -> str:
-    normalized = value.strip()
-    if not normalized:
-        raise ValueError(f"{label}不能为空")
-    return normalized
+class StructuringValidationError(ValueError):
+    """Validation failures that can be rendered beside their matching form field."""
+
+    def __init__(self, field_errors: dict[str, str]):
+        self.field_errors = field_errors
+        super().__init__("；".join(field_errors.values()))
 
 
 def _normalize_deadline(value: str) -> str:
@@ -43,26 +44,42 @@ def _normalize_deadline(value: str) -> str:
 
 
 def _validate_input(data: StructuringInput) -> None:
-    _required(data.official_url, "官方报名链接")
-    _required(data.target_audience, "适合人群")
-    if urlparse(data.official_url.strip()).scheme not in {"http", "https"}:
-        raise ValueError("官方报名链接必须以 http:// 或 https:// 开头")
+    errors: dict[str, str] = {}
+
+    for field_name, label in (
+        ("employer_name", "招聘单位标准名称"),
+        ("job_title", "岗位名称"),
+        ("job_family", "岗位族"),
+        ("recruitment_type", "招聘类型"),
+        ("location_category", "地点分类"),
+        ("location_detail", "工作地点"),
+        ("target_audience", "适合人群"),
+        ("direction_tags", "专业方向"),
+        ("official_url", "官方报名链接"),
+    ):
+        if not getattr(data, field_name).strip():
+            errors[field_name] = f"{label}不能为空"
+
+    if data.official_url.strip() and urlparse(data.official_url.strip()).scheme not in {"http", "https"}:
+        errors["official_url"] = "官方报名链接必须以 http:// 或 https:// 开头"
     if data.posting_scope == "attachment_pending":
-        raise ValueError("附件尚未核验，补齐岗位明细后才能进入待审核")
+        errors["posting_scope"] = "附件尚未核验，补齐岗位明细后才能进入待审核"
     if data.posting_scope in {"insufficient_information", "non_job_notice"}:
-        raise ValueError("该公告信息尚不完整，补充事实后才能进入待审核")
+        errors["posting_scope"] = "该公告信息尚不完整，补充事实后才能进入待审核"
     if data.posting_scope == "multi_role_announcement" and data.attachment_status != "checked":
-        raise ValueError("多岗位公告必须先完成附件核验")
+        errors["attachment_status"] = "多岗位公告必须先完成附件核验"
     if data.application_method == "email" and not data.application_contact.strip():
-        raise ValueError("邮箱投递必须填写报名邮箱")
+        errors["application_contact"] = "邮箱投递必须填写报名邮箱"
     if not 0 <= data.quality_score <= 100:
-        raise ValueError("质量分必须在0到100之间")
+        errors["quality_score"] = "质量分必须在0到100之间"
     if data.student_fit_level not in {"核心适配", "补充适配", "不适合核心学生用户", "待人工判断"}:
-        raise ValueError("学生适配选择无效")
+        errors["student_fit_level"] = "学生适配选择无效"
     if data.distribution_recommendation not in {"进入学生分发审核", "仅保留资料库", "不进入学生分发"}:
-        raise ValueError("分发建议选择无效")
+        errors["distribution_recommendation"] = "分发建议选择无效"
     if data.ai_confidence not in {"高", "中", "低"}:
-        raise ValueError("AI 判断置信度无效")
+        errors["ai_confidence"] = "AI 判断置信度无效"
+    if errors:
+        raise StructuringValidationError(errors)
 
 
 def structure_job(

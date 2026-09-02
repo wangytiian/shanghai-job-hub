@@ -21,7 +21,7 @@ from app.services.real_collection import REAL_SOURCE_NAME, collect_due_sources, 
 from app.sources.catalog import OFFICIAL_SOURCE_CATALOG, ensure_official_source_catalog
 from app.services.reviews import review_job
 from app.services.jobs import validate_publishable
-from app.services.structuring import StructuringInput, structure_job
+from app.services.structuring import StructuringInput, StructuringValidationError, structure_job
 from app.services.ai_structuring import build_structuring_prompt, parse_ai_draft
 from app.services.notice_classification import (
     classify_job,
@@ -444,6 +444,7 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
 
     @app.post("/jobs/{job_id}/structure")
     def submit_job_structuring(
+        request: Request,
         job_id: int,
         employer_name: str = Form(),
         job_title: str = Form(),
@@ -466,37 +467,71 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
         ai_rationale: str = Form(""),
         ai_confidence: str = Form("低"),
     ):
+        structuring_input = StructuringInput(
+            employer_name=employer_name,
+            job_title=job_title,
+            job_family=job_family,
+            recruitment_type=recruitment_type,
+            location_category=location_category,
+            location_detail=location_detail,
+            target_audience=target_audience,
+            direction_tags=direction_tags,
+            deadline=deadline,
+            official_url=official_url,
+            posting_scope=posting_scope,
+            attachment_status=attachment_status,
+            application_method=application_method,
+            application_contact=application_contact,
+            quality_score=quality_score,
+            note=note,
+            student_fit_level=student_fit_level,
+            distribution_recommendation=distribution_recommendation,
+            ai_rationale=ai_rationale,
+            ai_confidence=ai_confidence,
+        )
         with get_session() as session:
             try:
                 structure_job(
                     session,
                     job_id,
-                    StructuringInput(
-                        employer_name=employer_name,
-                        job_title=job_title,
-                        job_family=job_family,
-                        recruitment_type=recruitment_type,
-                        location_category=location_category,
-                        location_detail=location_detail,
-                        target_audience=target_audience,
-                        direction_tags=direction_tags,
-                        deadline=deadline,
-                        official_url=official_url,
-                        posting_scope=posting_scope,
-                        attachment_status=attachment_status,
-                        application_method=application_method,
-                        application_contact=application_contact,
-                        quality_score=quality_score,
-                        note=note,
-                        student_fit_level=student_fit_level,
-                        distribution_recommendation=distribution_recommendation,
-                        ai_rationale=ai_rationale,
-                        ai_confidence=ai_confidence,
-                    ),
+                    structuring_input,
                     "本地管理员",
                 )
+            except StructuringValidationError as exc:
+                job = session.get(Job, job_id)
+                if job is None:
+                    raise HTTPException(404, "岗位不存在")
+                return templates.TemplateResponse(
+                    request,
+                    "job_structuring.html",
+                    page_context(
+                        session,
+                        "jobs",
+                        job=job,
+                        form_values=structuring_input.__dict__,
+                        field_errors=exc.field_errors,
+                        submission_feedback="error",
+                        submission_message=f"还需处理 {len(exc.field_errors)} 项后才能进入待审核。",
+                    ),
+                    status_code=200,
+                )
             except ValueError as exc:
-                raise HTTPException(400, str(exc)) from exc
+                job = session.get(Job, job_id)
+                if job is None:
+                    raise HTTPException(404, "岗位不存在")
+                return templates.TemplateResponse(
+                    request,
+                    "job_structuring.html",
+                    page_context(
+                        session,
+                        "jobs",
+                        form_values=structuring_input.__dict__,
+                        field_errors={},
+                        submission_feedback="error",
+                        submission_message=str(exc),
+                    ),
+                    status_code=200,
+                )
         return RedirectResponse(f"/jobs/{job_id}", status_code=303)
 
     @app.post("/jobs/{job_id}/classification")

@@ -7,8 +7,13 @@
   <h1>公告结构化</h1>
   <p>根据公开原文补齐事实字段。提交后仍需最终人工审核，系统不会自动发布。</p>
 </section>
+{% set values = form_values or {} %}
+{% set errors = field_errors or {} %}
+{% macro invalid_attr(name) %}{% if errors.get(name) %} aria-invalid="true"{% endif %}{% endmacro %}
+{% macro error_note(name) %}{% if errors.get(name) %}<span class="field-error-message" role="alert">{{ errors.get(name) }}</span>{% endif %}{% endmacro %}
 <div class="notice notice-warning"><strong>请以原文为准。</strong>不得自行推断薪资、编制、转正、专业不限或截止日期。</div>
 {% if ai_feedback == 'error' %}<div class="notice notice-error" role="alert"><strong>AI 预填未完成。</strong>{{ ai_message }}</div>{% elif ai_feedback == 'success' %}<div class="notice notice-success" role="status"><strong>AI 预填已生成。</strong>{{ ai_message }} AI 只能填写原文有依据的字段；岗位在附件或无法确认时会标记为“待附件核验/信息不足”。请逐项核对后再提交。{{ ai_draft.uncertainties }}</div>{% endif %}
+{% if submission_feedback == 'error' %}<div class="notice notice-error" role="alert" data-submission-feedback><strong>本次未能提交。</strong>{{ submission_message }} 请查看下方标红字段。</div>{% endif %}
 <div class="detail-layout">
   <section class="panel detail-primary">
     <div class="section-heading"><div><span class="eyebrow">FORM</span><h2>补全岗位事实</h2></div></div>
@@ -16,32 +21,33 @@
       <button class="button button-secondary" type="submit" data-ai-prefill-button>AI 预填表单</button>
       <span class="ai-prefill-status" data-ai-prefill-status hidden aria-live="polite">AI 正在读取公告，请稍候…</span>
     </form>
-    <form class="review-form" method="post" action="/jobs/{{ job.id }}/structure">
+    <form class="review-form" method="post" action="/jobs/{{ job.id }}/structure" data-structuring-form novalidate>
+      <div class="notice notice-error client-validation-notice" data-client-validation-notice hidden role="alert">请补充标红的必填项或修正格式后再提交。</div>
       <div class="section-heading"><div><span class="eyebrow">FACTS</span><h2>原文事实</h2></div></div>
       <div class="form-grid">
-        <label>招聘单位标准名称<input required name="employer_name" value="{{ ai_draft.employer_name if ai_draft else job.employer_name }}"></label>
-        <label>公告范围<select name="posting_scope"><option value="single_role" {% if (ai_draft and ai_draft.posting_scope == 'single_role') or (not ai_draft and job.posting_scope == 'single_role') %}selected{% endif %}>单一明确岗位</option><option value="multi_role_announcement" {% if ai_draft and ai_draft.posting_scope == 'multi_role_announcement' %}selected{% endif %}>多岗位招聘公告</option><option value="attachment_pending" {% if ai_draft and ai_draft.posting_scope == 'attachment_pending' %}selected{% endif %}>岗位明细在附件</option><option value="insufficient_information" {% if ai_draft and ai_draft.posting_scope == 'insufficient_information' %}selected{% endif %}>原文信息不足</option><option value="non_job_notice" {% if ai_draft and ai_draft.posting_scope == 'non_job_notice' %}selected{% endif %}>非具体岗位通知</option></select></label>
-        <label>附件核验状态<select name="attachment_status"><option value="not_required" {% if (ai_draft and ai_draft.attachment_status == 'not_required') or (not ai_draft and job.attachment_status == 'not_required') %}selected{% endif %}>无需附件</option><option value="pending" {% if ai_draft and ai_draft.attachment_status == 'pending' %}selected{% endif %}>待核验</option><option value="checked" {% if ai_draft and ai_draft.attachment_status == 'checked' %}selected{% endif %}>已核验</option></select></label>
-        <label>岗位名称<input required name="job_title" value="{{ ai_draft.job_title if ai_draft else job.job_title }}" placeholder="单一岗位填具体名称；多岗位可填公告名称"></label>
-        <label>岗位族<input required name="job_family" value="{{ ai_draft.job_family if ai_draft else job.job_family }}" placeholder="如：财务分析"></label>
-        <label>招聘类型<input required name="recruitment_type" value="{{ ai_draft.recruitment_type if ai_draft else job.recruitment_type }}" placeholder="实习 / 校招 / 初级社招"></label>
-        <label>地点分类<input required name="location_category" value="{{ ai_draft.location_category if ai_draft and ai_draft.location_category else job.location_category }}" placeholder="明确上海 / 全国"></label>
-        <label>工作地点<input required name="location_detail" value="{{ ai_draft.location_detail if ai_draft and ai_draft.location_detail else job.location_detail }}"></label>
-        <label>适合人群<input required name="target_audience" value="{{ ai_draft.target_audience if ai_draft and ai_draft.target_audience else job.target_audience }}" placeholder="可填写多个标签，如：博士毕业生/博士后、高级专业技术人员"></label>
-        <label>专业方向<input required name="direction_tags" value="{{ ai_draft.direction_tags if ai_draft else '' }}" placeholder="如：会计审计、金融银行"></label>
-        <label>截止日期<input name="deadline" value="{{ ai_draft.deadline if ai_draft else '' }}" placeholder="如：2026-09-30 或 招满即止；原文未写可留空"></label>
-        <label>官方公告链接（官方报名链接）<input required type="url" name="official_url" value="{{ ai_draft.official_url if ai_draft else '' }}" placeholder="必填：https://..."></label>
-        <label>投递方式<select name="application_method"><option value="official_page" {% if (ai_draft and ai_draft.application_method == 'official_page') or (not ai_draft and job.application_method == 'official_page') %}selected{% endif %}>官方页面投递</option><option value="email" {% if ai_draft and ai_draft.application_method == 'email' %}selected{% endif %}>邮件投递</option><option value="official_platform" {% if ai_draft and ai_draft.application_method == 'official_platform' %}selected{% endif %}>官方招聘平台</option><option value="on_site" {% if ai_draft and ai_draft.application_method == 'on_site' %}selected{% endif %}>现场报名</option><option value="other" {% if ai_draft and ai_draft.application_method == 'other' %}selected{% endif %}>其他官方方式</option><option value="unknown" {% if ai_draft and ai_draft.application_method == 'unknown' %}selected{% endif %}>原文未明确</option></select></label>
-        <label>报名邮箱/平台入口<input name="application_contact" value="{{ ai_draft.application_contact if ai_draft else job.application_contact }}" placeholder="邮件投递必填；其他方式可留空"></label>
-        <label>质量分（0-100）<input required type="number" min="0" max="100" name="quality_score" value="{{ job.quality_score if job.quality_score else 70 }}" placeholder="人工按来源、完整度、时效和学生匹配度评分"></label>
+        <label{% if errors.get('employer_name') %} class="field-error"{% endif %}>招聘单位标准名称<input required name="employer_name"{{ invalid_attr('employer_name') }} value="{{ values.get('employer_name', ai_draft.employer_name if ai_draft else job.employer_name) }}">{{ error_note('employer_name') }}</label>
+        <label{% if errors.get('posting_scope') %} class="field-error"{% endif %}>公告范围<select name="posting_scope"{{ invalid_attr('posting_scope') }}><option value="single_role" {% if values.get('posting_scope', ai_draft.posting_scope if ai_draft else job.posting_scope) == 'single_role' %}selected{% endif %}>单一明确岗位</option><option value="multi_role_announcement" {% if values.get('posting_scope', ai_draft.posting_scope if ai_draft else '') == 'multi_role_announcement' %}selected{% endif %}>多岗位招聘公告</option><option value="attachment_pending" {% if values.get('posting_scope', ai_draft.posting_scope if ai_draft else '') == 'attachment_pending' %}selected{% endif %}>岗位明细在附件</option><option value="insufficient_information" {% if values.get('posting_scope', ai_draft.posting_scope if ai_draft else '') == 'insufficient_information' %}selected{% endif %}>原文信息不足</option><option value="non_job_notice" {% if values.get('posting_scope', ai_draft.posting_scope if ai_draft else '') == 'non_job_notice' %}selected{% endif %}>非具体岗位通知</option></select>{{ error_note('posting_scope') }}</label>
+        <label{% if errors.get('attachment_status') %} class="field-error"{% endif %}>附件核验状态<select name="attachment_status"{{ invalid_attr('attachment_status') }}><option value="not_required" {% if values.get('attachment_status', ai_draft.attachment_status if ai_draft else job.attachment_status) == 'not_required' %}selected{% endif %}>无需附件</option><option value="pending" {% if values.get('attachment_status', ai_draft.attachment_status if ai_draft else '') == 'pending' %}selected{% endif %}>待核验</option><option value="checked" {% if values.get('attachment_status', ai_draft.attachment_status if ai_draft else '') == 'checked' %}selected{% endif %}>已核验</option></select>{{ error_note('attachment_status') }}</label>
+        <label{% if errors.get('job_title') %} class="field-error"{% endif %}>岗位名称<input required name="job_title"{{ invalid_attr('job_title') }} value="{{ values.get('job_title', ai_draft.job_title if ai_draft else job.job_title) }}" placeholder="单一岗位填具体名称；多岗位可填公告名称">{{ error_note('job_title') }}</label>
+        <label{% if errors.get('job_family') %} class="field-error"{% endif %}>岗位族<input required name="job_family"{{ invalid_attr('job_family') }} value="{{ values.get('job_family', ai_draft.job_family if ai_draft else job.job_family) }}" placeholder="如：财务分析">{{ error_note('job_family') }}</label>
+        <label{% if errors.get('recruitment_type') %} class="field-error"{% endif %}>招聘类型<input required name="recruitment_type"{{ invalid_attr('recruitment_type') }} value="{{ values.get('recruitment_type', ai_draft.recruitment_type if ai_draft else job.recruitment_type) }}" placeholder="实习 / 校招 / 初级社招">{{ error_note('recruitment_type') }}</label>
+        <label{% if errors.get('location_category') %} class="field-error"{% endif %}>地点分类<input required name="location_category"{{ invalid_attr('location_category') }} value="{{ values.get('location_category', ai_draft.location_category if ai_draft and ai_draft.location_category else job.location_category) }}" placeholder="明确上海 / 全国">{{ error_note('location_category') }}</label>
+        <label{% if errors.get('location_detail') %} class="field-error"{% endif %}>工作地点<input required name="location_detail"{{ invalid_attr('location_detail') }} value="{{ values.get('location_detail', ai_draft.location_detail if ai_draft and ai_draft.location_detail else job.location_detail) }}">{{ error_note('location_detail') }}</label>
+        <label{% if errors.get('target_audience') %} class="field-error"{% endif %}>适合人群<input required name="target_audience"{{ invalid_attr('target_audience') }} value="{{ values.get('target_audience', ai_draft.target_audience if ai_draft and ai_draft.target_audience else job.target_audience) }}" placeholder="可填写多个标签，如：博士毕业生/博士后、高级专业技术人员">{{ error_note('target_audience') }}</label>
+        <label{% if errors.get('direction_tags') %} class="field-error"{% endif %}>专业方向<input required name="direction_tags"{{ invalid_attr('direction_tags') }} value="{{ values.get('direction_tags', ai_draft.direction_tags if ai_draft else '') }}" placeholder="如：会计审计、金融银行">{{ error_note('direction_tags') }}</label>
+        <label>截止日期<input name="deadline" value="{{ values.get('deadline', ai_draft.deadline if ai_draft else '') }}" placeholder="如：2026-09-30 或 招满即止；原文未写可留空"></label>
+        <label{% if errors.get('official_url') %} class="field-error"{% endif %}>官方公告链接（官方报名链接）<input required type="url" name="official_url"{{ invalid_attr('official_url') }} value="{{ values.get('official_url', ai_draft.official_url if ai_draft else '') }}" placeholder="必填：https://...">{{ error_note('official_url') }}</label>
+        <label>投递方式<select name="application_method"><option value="official_page" {% if values.get('application_method', ai_draft.application_method if ai_draft else job.application_method) == 'official_page' %}selected{% endif %}>官方页面投递</option><option value="email" {% if values.get('application_method', ai_draft.application_method if ai_draft else '') == 'email' %}selected{% endif %}>邮件投递</option><option value="official_platform" {% if values.get('application_method', ai_draft.application_method if ai_draft else '') == 'official_platform' %}selected{% endif %}>官方招聘平台</option><option value="on_site" {% if values.get('application_method', ai_draft.application_method if ai_draft else '') == 'on_site' %}selected{% endif %}>现场报名</option><option value="other" {% if values.get('application_method', ai_draft.application_method if ai_draft else '') == 'other' %}selected{% endif %}>其他官方方式</option><option value="unknown" {% if values.get('application_method', ai_draft.application_method if ai_draft else '') == 'unknown' %}selected{% endif %}>原文未明确</option></select></label>
+        <label{% if errors.get('application_contact') %} class="field-error"{% endif %}>报名邮箱/平台入口<input name="application_contact"{{ invalid_attr('application_contact') }} value="{{ values.get('application_contact', ai_draft.application_contact if ai_draft else job.application_contact) }}" placeholder="邮件投递必填；其他方式可留空">{{ error_note('application_contact') }}</label>
+        <label{% if errors.get('quality_score') %} class="field-error"{% endif %}>质量分（0-100）<input required type="number" min="0" max="100" name="quality_score"{{ invalid_attr('quality_score') }} value="{{ values.get('quality_score', job.quality_score if job.quality_score else 70) }}" placeholder="人工按来源、完整度、时效和学生匹配度评分">{{ error_note('quality_score') }}</label>
       </div>
       <div class="section-heading section-block"><div><span class="eyebrow">AI ROUTING</span><h2>AI 运营判断</h2><p>以下是基于全文的分发建议，不属于企业官方要求。提交即代表你已人工确认或修改。</p></div></div>
       <div class="form-grid">
-        <label>学生适配<select required name="student_fit_level">{% for option in ['核心适配','补充适配','不适合核心学生用户','待人工判断'] %}<option value="{{ option }}" {% if (ai_draft and ai_draft.student_fit_level == option) or (not ai_draft and job.student_fit_level == option) %}selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
-        <label>分发建议<select required name="distribution_recommendation">{% for option in ['进入学生分发审核','仅保留资料库','不进入学生分发'] %}<option value="{{ option }}" {% if (ai_draft and ai_draft.distribution_recommendation == option) or (not ai_draft and job.distribution_recommendation == option) %}selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
-        <label>判断置信度<select required name="ai_confidence">{% for option in ['高','中','低'] %}<option value="{{ option }}" {% if (ai_draft and ai_draft.confidence == option) or (not ai_draft and job.ai_confidence == option) %}selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
+        <label{% if errors.get('student_fit_level') %} class="field-error"{% endif %}>学生适配<select required name="student_fit_level"{{ invalid_attr('student_fit_level') }}>{% for option in ['核心适配','补充适配','不适合核心学生用户','待人工判断'] %}<option value="{{ option }}" {% if values.get('student_fit_level', ai_draft.student_fit_level if ai_draft else job.student_fit_level) == option %}selected{% endif %}>{{ option }}</option>{% endfor %}</select>{{ error_note('student_fit_level') }}</label>
+        <label{% if errors.get('distribution_recommendation') %} class="field-error"{% endif %}>分发建议<select required name="distribution_recommendation"{{ invalid_attr('distribution_recommendation') }}>{% for option in ['进入学生分发审核','仅保留资料库','不进入学生分发'] %}<option value="{{ option }}" {% if values.get('distribution_recommendation', ai_draft.distribution_recommendation if ai_draft else job.distribution_recommendation) == option %}selected{% endif %}>{{ option }}</option>{% endfor %}</select>{{ error_note('distribution_recommendation') }}</label>
+        <label{% if errors.get('ai_confidence') %} class="field-error"{% endif %}>判断置信度<select required name="ai_confidence"{{ invalid_attr('ai_confidence') }}>{% for option in ['高','中','低'] %}<option value="{{ option }}" {% if values.get('ai_confidence', ai_draft.confidence if ai_draft else job.ai_confidence) == option %}selected{% endif %}>{{ option }}</option>{% endfor %}</select>{{ error_note('ai_confidence') }}</label>
       </div>
-      <label>AI 判断依据<textarea required name="ai_rationale" rows="3" placeholder="须说明与核心学生用户的匹配或不匹配依据。">{{ ai_draft.rationale if ai_draft else job.ai_rationale }}</textarea></label>
+      <label{% if errors.get('ai_rationale') %} class="field-error"{% endif %}>AI 判断依据<textarea required name="ai_rationale"{{ invalid_attr('ai_rationale') }} rows="3" placeholder="须说明与核心学生用户的匹配或不匹配依据。">{{ values.get('ai_rationale', ai_draft.rationale if ai_draft else job.ai_rationale) }}</textarea>{{ error_note('ai_rationale') }}</label>
       <p class="form-help">截止日期如原文未写，可留空；系统会记录为“公告未明确统一截止时间”，发布时提示同学尽快查看原文，不会虚构日期。</p>
       <label>核验备注<textarea name="note" rows="3" placeholder="例如：已核对公告发布日期、投递入口、面向届别和报名安排。"></textarea></label>
       <div class="button-group"><button class="button button-primary" type="submit">提交并进入待审核</button><a class="button button-secondary" href="/jobs/{{ job.id }}">暂不提交</a></div>
@@ -81,5 +87,31 @@
   window.addEventListener('pageshow', () => {
     document.querySelectorAll('[data-ai-prefill-form]').forEach(resetAiPrefillState);
   });
+
+  const structuringForm = document.querySelector('[data-structuring-form]');
+  const clientValidationNotice = document.querySelector('[data-client-validation-notice]');
+  if (structuringForm) {
+    const showClientValidation = () => {
+      if (clientValidationNotice) clientValidationNotice.hidden = false;
+    };
+    structuringForm.addEventListener('submit', (event) => {
+      if (!structuringForm.checkValidity()) {
+        event.preventDefault();
+        showClientValidation();
+        structuringForm.querySelector(':invalid')?.focus();
+      }
+    });
+    structuringForm.addEventListener('invalid', (event) => {
+      event.target.setAttribute('aria-invalid', 'true');
+      event.target.closest('label')?.classList.add('field-error');
+      showClientValidation();
+    }, true);
+    structuringForm.addEventListener('input', (event) => {
+      if (event.target.validity.valid) {
+        event.target.removeAttribute('aria-invalid');
+        event.target.closest('label')?.classList.remove('field-error');
+      }
+    });
+  }
 </script>
 {% endblock %}

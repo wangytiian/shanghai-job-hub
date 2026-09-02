@@ -672,6 +672,56 @@ def test_ai_prefill_loading_indicator_is_reset_after_navigation_or_browser_resto
     assert ".ai-prefill-status[hidden]{display:none!important}" in stylesheet
 
 
+def test_structuring_submission_keeps_form_and_marks_attachment_error_inline():
+    app = create_app_with_fake_ai_settings()
+    job_id = _create_ai_ready_job(app)
+
+    response = TestClient(app).post(
+        f"/jobs/{job_id}/structure",
+        data={
+            "employer_name": "上海测试单位",
+            "job_title": "财务实习生",
+            "job_family": "财务分析",
+            "recruitment_type": "实习",
+            "location_category": "明确上海",
+            "location_detail": "上海",
+            "target_audience": "大三实习",
+            "direction_tags": "会计审计",
+            "deadline": "2026-12-31",
+            "official_url": "https://example.com/apply",
+            "posting_scope": "attachment_pending",
+            "attachment_status": "pending",
+            "application_method": "official_page",
+            "application_contact": "",
+            "quality_score": "70",
+            "student_fit_level": "核心适配",
+            "distribution_recommendation": "进入学生分发审核",
+            "ai_rationale": "与会计专业学生相关。",
+            "ai_confidence": "中",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "本次未能提交" in response.text
+    assert "附件尚未核验，补齐岗位明细后才能进入待审核" in response.text
+    assert 'name="posting_scope" aria-invalid="true"' in response.text
+    assert 'value="财务实习生"' in response.text
+
+
+def test_structuring_page_marks_browser_validation_errors_without_navigation():
+    app = create_app_with_fake_ai_settings()
+    job_id = _create_ai_ready_job(app)
+    response = TestClient(app).get(f"/jobs/{job_id}/structure")
+    stylesheet = (Path(__file__).resolve().parents[1] / "app" / "static" / "app.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'data-structuring-form' in response.text
+    assert 'data-client-validation-notice' in response.text
+    assert "structuringForm.checkValidity()" in response.text
+    assert ".field-error-message" in stylesheet
+
+
 def test_jobs_page_shows_batch_notice_confirmation_and_post_creates_audit_log():
     app = create_app("sqlite+pysqlite:///:memory:")
     with app.state.session_factory() as session:
