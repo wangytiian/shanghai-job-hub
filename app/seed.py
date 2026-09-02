@@ -100,7 +100,7 @@ def seed_demo_data(session) -> SeedResult:
             )
             created_jobs += 1
         else:
-            if not job.intake_grade:
+            if job.intake_grade not in {"A", "B"}:
                 job.intake_grade = "A"
                 job.intake_route = "优先待核验"
                 job.intake_reason = "演示岗位：实习、校招或毕业两年内初级岗位"

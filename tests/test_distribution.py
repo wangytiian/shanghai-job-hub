@@ -15,7 +15,7 @@ def test_second_demo_collection_does_not_duplicate_jobs(session):
 def test_demo_collection_backfills_abcd_grade_for_existing_demo_records(session):
     run_demo_collection(session)
     job = session.query(Job).first()
-    job.intake_grade = ""
+    job.intake_grade = "C"
     job.intake_route = ""
     job.intake_reason = ""
     session.commit()
