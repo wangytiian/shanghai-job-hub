@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Job, Source, TaskRun
-from app.services.intake_screening import screen_intake
+from app.services.intake_screening import screen_intake, screen_intake_with_ai
 from app.services.collection_strategy import build_collection_plan
 from app.services.source_library import can_auto_collect
 from app.sources.catalog import ensure_official_source_catalog
@@ -100,6 +100,7 @@ def _save_detail(
     source: Source,
     detail,
     collected_now: datetime,
+    intake_ai_complete=None,
 ) -> str:
     identity_key = getattr(detail, "identity_key", detail.title)
     fingerprint = f"{source.name}|{identity_key}|{detail.published_at}|{source.scope_group}|公告"
@@ -107,7 +108,11 @@ def _save_detail(
     attachment_links = _attachment_links(detail)
     content_fingerprint = _content_fingerprint(f"{detail.evidence_text}\n{attachment_links}")
     if job is None:
-        intake = screen_intake(detail.title, detail.evidence_text)
+        intake = (
+            screen_intake_with_ai(detail.title, detail.evidence_text, intake_ai_complete)
+            if intake_ai_complete is not None
+            else screen_intake(detail.title, detail.evidence_text)
+        )
         session.add(
             Job(
                 fingerprint=fingerprint,
@@ -160,7 +165,8 @@ def _save_detail(
 
 
 def collect_official_list_source(
-    session: Session, client, source: Source, limit: int = 12, now: datetime | None = None
+    session: Session, client, source: Source, limit: int = 12, now: datetime | None = None,
+    intake_ai_complete=None,
 ) -> RealCollectionResult:
     collected_now = now or datetime.now()
     source.last_checked_at = collected_now
@@ -171,7 +177,9 @@ def collect_official_list_source(
             raise ValueError("来源列表未发现带日期的招聘公告，未将其视为没有新招聘")
         for listing in listings:
             try:
-                outcome = _save_detail(session, source, fetch_official_detail(client, listing), collected_now)
+                outcome = _save_detail(
+                    session, source, fetch_official_detail(client, listing), collected_now, intake_ai_complete
+                )
                 if outcome == "created":
                     created_jobs += 1
                 elif outcome == "updated":
@@ -192,7 +200,7 @@ def collect_official_list_source(
 
 
 def collect_due_sources(
-    session: Session, client, now: datetime | None = None, force: bool = False
+    session: Session, client, now: datetime | None = None, force: bool = False, intake_ai_complete=None,
 ) -> DailyCollectionResult:
     collected_now = now or datetime.now()
     ensure_official_source_catalog(session)
@@ -209,11 +217,17 @@ def collect_due_sources(
         attempted += 1
         try:
             if source.adapter_key == "shanghai_sasac":
-                result = collect_shanghai_sasac(session, client, now=collected_now)
+                result = collect_shanghai_sasac(
+                    session, client, now=collected_now, intake_ai_complete=intake_ai_complete
+                )
             elif source.adapter_key == "official_dated_list":
-                result = collect_official_list_source(session, client, source, now=collected_now)
+                result = collect_official_list_source(
+                    session, client, source, now=collected_now, intake_ai_complete=intake_ai_complete
+                )
             elif source.adapter_key == "spdb_shanghai_jobs":
-                result = collect_spdb_shanghai_jobs(session, client, now=collected_now)
+                result = collect_spdb_shanghai_jobs(
+                    session, client, now=collected_now, intake_ai_complete=intake_ai_complete
+                )
             else:
                 skipped += 1
                 continue
@@ -230,7 +244,7 @@ def collect_due_sources(
 
 
 def collect_spdb_shanghai_jobs(
-    session: Session, client, limit: int = 20, now: datetime | None = None
+    session: Session, client, limit: int = 20, now: datetime | None = None, intake_ai_complete=None,
 ) -> RealCollectionResult:
     collected_now = now or datetime.now()
     ensure_official_source_catalog(session)
@@ -243,7 +257,7 @@ def collect_spdb_shanghai_jobs(
         fetched = fetch_spdb_shanghai_job_details(client, limit=limit, today=collected_now.date())
         for detail in fetched.details:
             try:
-                outcome = _save_detail(session, source, detail, collected_now)
+                outcome = _save_detail(session, source, detail, collected_now, intake_ai_complete)
                 if outcome == "created":
                     created_jobs += 1
                 elif outcome == "updated":
@@ -268,7 +282,7 @@ def collect_spdb_shanghai_jobs(
 
 
 def collect_shanghai_sasac(
-    session: Session, client, limit: int = 12, now: datetime | None = None
+    session: Session, client, limit: int = 12, now: datetime | None = None, intake_ai_complete=None,
 ) -> RealCollectionResult:
     collected_now = now or datetime.now()
     source = _ensure_source(session, collected_now)
@@ -287,6 +301,11 @@ def collect_shanghai_sasac(
                 job = session.scalar(select(Job).where(Job.fingerprint == fingerprint))
                 content_fingerprint = _content_fingerprint(detail.evidence_text)
                 if job is None:
+                    intake = (
+                        screen_intake_with_ai(detail.title, detail.evidence_text, intake_ai_complete)
+                        if intake_ai_complete is not None
+                        else screen_intake(detail.title, detail.evidence_text)
+                    )
                     session.add(
                         Job(
                             fingerprint=fingerprint,
@@ -311,6 +330,11 @@ def collect_shanghai_sasac(
                             lifecycle_status="正常",
                             last_change_summary="",
                             status="待核验",
+                            intake_grade=intake.grade,
+                            intake_route=intake.route,
+                            intake_reason=intake.reason,
+                            intake_evidence=intake.evidence,
+                            intake_confidence=intake.confidence,
                         )
                     )
                     created_jobs += 1

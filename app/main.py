@@ -59,6 +59,19 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
     def get_ai_settings_service() -> AiSettingsService:
         return app.state.ai_settings_service
 
+    def configured_intake_ai_complete(session: Session):
+        """Return a server-side Qwen callback only when text AI is enabled locally."""
+        service = get_ai_settings_service()
+        setting = service.get_setting(session)
+        api_key = service.credential_store.get_secret()
+        if not setting.text_enabled or not api_key:
+            return None
+
+        def complete(prompt: str) -> str:
+            return service.bailian_client.complete(api_key, setting.text_model, prompt)
+
+        return complete
+
     def build_global_status(session: Session) -> dict[str, object]:
         last_task = session.scalar(select(TaskRun).order_by(TaskRun.id.desc()).limit(1))
         pending = session.scalar(
@@ -639,7 +652,9 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
     @app.post("/tasks/daily-collection")
     def daily_collection():
         with get_session() as session, httpx.Client(follow_redirects=True) as client:
-            result = collect_due_sources(session, client, force=True)
+            result = collect_due_sources(
+                session, client, force=True, intake_ai_complete=configured_intake_ai_complete(session)
+            )
         if result.successful_sources == 0:
             raise HTTPException(502, "每日采集未成功完成，请到来源监控查看失败原因。")
         return RedirectResponse("/jobs?data_type=real&status=待核验", status_code=303)

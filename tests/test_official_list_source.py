@@ -51,3 +51,26 @@ def test_official_detail_save_persists_attachment_links(session):
 
     assert "岗位说明.xlsx" in job.attachment_links
     assert "https://example.com/notices/roles.xlsx" in job.attachment_links
+
+
+def test_official_detail_save_uses_ai_intake_result_when_available(session):
+    source = Source(name="AI 初筛来源", url="https://example.com", level="一级", source_type="公共平台")
+    session.add(source)
+    session.commit()
+    detail = parse_official_detail_html(
+        '<h1>银行管培生招聘</h1><p>发布时间：2026-08-31</p><p>面向2027届应届毕业生。</p>',
+        OfficialListing("银行管培生招聘", "2026-08-31", "https://example.com/notices/ai.html"),
+    )
+
+    _save_detail(
+        session,
+        source,
+        detail,
+        __import__("datetime").datetime.now(),
+        lambda _prompt: '{"grade":"A","reason":"面向应届生","evidence":"2027届应届毕业生","confidence":"高"}',
+    )
+    session.commit()
+
+    job = session.query(Job).filter_by(is_demo=False).one()
+    assert job.intake_grade == "A"
+    assert job.intake_evidence == "2027届应届毕业生"
