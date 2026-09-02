@@ -34,6 +34,7 @@ def _upgrade_sqlite_columns(engine) -> None:
         },
         "ai_provider_settings": {
             "base_url": "VARCHAR(500) NOT NULL DEFAULT ''",
+            "api_mode": "VARCHAR(30) NOT NULL DEFAULT 'chat_completions'",
             "is_active_text_provider": "BOOLEAN NOT NULL DEFAULT 0",
         },
         "jobs": {

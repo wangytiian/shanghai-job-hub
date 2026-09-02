@@ -13,6 +13,9 @@ OPENAI_COMPATIBLE_PROVIDER = "openai_compatible"
 DEFAULT_TEXT_MODEL = "qwen3.7-flash"
 DEFAULT_OCR_MODEL = "qwen-vl-ocr"
 DEFAULT_OPENAI_MODEL = ""
+OPENAI_API_MODE_CHAT_COMPLETIONS = "chat_completions"
+OPENAI_API_MODE_RESPONSES = "responses"
+ALLOWED_OPENAI_API_MODES = {OPENAI_API_MODE_CHAT_COMPLETIONS, OPENAI_API_MODE_RESPONSES}
 ALLOWED_TEXT_MODELS = {DEFAULT_TEXT_MODEL}
 ALLOWED_OCR_MODELS = {DEFAULT_OCR_MODEL}
 BAILIAN_CHAT_COMPLETIONS_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
@@ -86,28 +89,71 @@ class BailianClient:
 
 class OpenAICompatibleClient:
     @staticmethod
-    def _chat_url(base_url: str) -> str:
+    def _endpoint_url(base_url: str, api_mode: str) -> str:
         cleaned = base_url.strip().rstrip("/")
-        return cleaned if cleaned.endswith("/chat/completions") else f"{cleaned}/chat/completions"
+        suffix = "/responses" if api_mode == OPENAI_API_MODE_RESPONSES else "/chat/completions"
+        return cleaned if cleaned.endswith(suffix) else f"{cleaned}{suffix}"
 
     def test_connection(self, api_key: str, base_url: str, model: str) -> None:
         response = httpx.post(
-            self._chat_url(base_url),
+            self._endpoint_url(base_url, OPENAI_API_MODE_CHAT_COMPLETIONS),
             headers={"Authorization": f"Bearer {api_key}"},
             json={"model": model, "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1},
             timeout=15.0,
         )
         response.raise_for_status()
 
-    def complete(self, api_key: str, base_url: str, model: str, prompt: str) -> str:
+    @staticmethod
+    def _responses_text(payload: dict) -> str:
+        direct = payload.get("output_text")
+        if isinstance(direct, str) and direct.strip():
+            return direct.strip()
+        for output in payload.get("output", []):
+            for content in output.get("content", []):
+                text = content.get("text")
+                if isinstance(text, str) and text.strip():
+                    return text.strip()
+        raise ValueError("Responses API 未返回可解析的文本结果")
+
+    def complete(
+        self,
+        api_key: str,
+        base_url: str,
+        model: str,
+        prompt: str,
+        api_mode: str = OPENAI_API_MODE_CHAT_COMPLETIONS,
+    ) -> str:
+        if api_mode not in ALLOWED_OPENAI_API_MODES:
+            raise ValueError("不支持的 GPT 接口模式")
+        if api_mode == OPENAI_API_MODE_RESPONSES:
+            payload = {
+                "model": model,
+                "instructions": "Return only valid JSON.",
+                "input": prompt,
+            }
+        else:
+            payload = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": "Return only valid JSON."},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.1,
+            }
         response = httpx.post(
-            self._chat_url(base_url),
+            self._endpoint_url(base_url, api_mode),
             headers={"Authorization": f"Bearer {api_key}"},
-            json={"model": model, "messages": [{"role": "system", "content": "Return only valid JSON."}, {"role": "user", "content": prompt}], "temperature": 0.1},
+            json=payload,
             timeout=45.0,
         )
         response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"]
+        response_payload = response.json()
+        if api_mode == OPENAI_API_MODE_RESPONSES:
+            return self._responses_text(response_payload)
+        content = response_payload["choices"][0]["message"]["content"]
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("Chat Completions 未返回可解析的文本结果")
+        return content.strip()
 
 
 def mask_api_key(value: str) -> str:
@@ -138,6 +184,7 @@ class AiSettingsService:
             setting = AiProviderSetting(
                 provider=provider,
                 base_url="",
+                api_mode=OPENAI_API_MODE_CHAT_COMPLETIONS,
                 text_model=DEFAULT_TEXT_MODEL if provider == BAILIAN_PROVIDER else DEFAULT_OPENAI_MODEL,
                 ocr_model=DEFAULT_OCR_MODEL,
                 text_enabled=provider == BAILIAN_PROVIDER,
@@ -185,13 +232,26 @@ class AiSettingsService:
         session.refresh(setting)
         return setting
 
-    def save_openai_settings(self, session: Session, *, api_key: str, base_url: str, text_model: str, text_enabled: bool, make_active: bool) -> AiProviderSetting:
+    def save_openai_settings(
+        self,
+        session: Session,
+        *,
+        api_key: str,
+        base_url: str,
+        text_model: str,
+        api_mode: str = OPENAI_API_MODE_CHAT_COMPLETIONS,
+        text_enabled: bool,
+        make_active: bool,
+    ) -> AiProviderSetting:
         model = text_model.strip()
         if not model:
             raise ValueError("GPT 模型名不能为空")
+        if api_mode not in ALLOWED_OPENAI_API_MODES:
+            raise ValueError("不支持的 GPT 接口模式")
         setting = self.save_api_key(session, api_key, OPENAI_COMPATIBLE_PROVIDER)
         setting.base_url = _normalize_base_url(base_url)
         setting.text_model = model
+        setting.api_mode = api_mode
         setting.text_enabled = text_enabled
         setting.ocr_enabled = False
         if make_active:
@@ -212,7 +272,15 @@ class AiSettingsService:
             else:
                 if not setting.base_url or not setting.text_model:
                     raise TextProviderNotReadyError("请先填写 GPT API Base URL 和模型名")
-                self.openai_client.test_connection(api_key, setting.base_url, setting.text_model)
+                test_result = self.openai_client.complete(
+                    api_key,
+                    setting.base_url,
+                    setting.text_model,
+                    "Reply with exactly: OK",
+                    setting.api_mode,
+                )
+                if not test_result.strip():
+                    raise ValueError("模型未返回可识别的测试结果")
         except Exception as exc:
             setting.connection_status = "error"
             setting.last_error_summary = self._sanitize_error(str(exc), api_key)
@@ -235,7 +303,9 @@ class AiSettingsService:
             return self.bailian_client.complete(api_key, setting.text_model, prompt)
         if not setting.base_url or not setting.text_model:
             raise TextProviderNotReadyError("当前 GPT 配置缺少 API Base URL 或模型名")
-        return self.openai_client.complete(api_key, setting.base_url, setting.text_model, prompt)
+        return self.openai_client.complete(
+            api_key, setting.base_url, setting.text_model, prompt, setting.api_mode
+        )
 
     @staticmethod
     def _sanitize_error(message: str, api_key: str) -> str:

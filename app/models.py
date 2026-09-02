@@ -126,6 +126,7 @@ class AiProviderSetting(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     provider: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
     base_url: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    api_mode: Mapped[str] = mapped_column(String(30), default="chat_completions", nullable=False)
     text_model: Mapped[str] = mapped_column(String(80), nullable=False)
     ocr_model: Mapped[str] = mapped_column(String(80), nullable=False)
     text_enabled: Mapped[bool] = mapped_column(default=True, nullable=False)

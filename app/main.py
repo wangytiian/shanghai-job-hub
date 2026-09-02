@@ -369,6 +369,7 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
         api_key: str = Form(),
         base_url: str = Form(),
         text_model: str = Form(),
+        api_mode: str = Form("chat_completions"),
         text_enabled: str | None = Form(None),
         make_active: str | None = Form(None),
     ):
@@ -379,6 +380,7 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
                     api_key=api_key,
                     base_url=base_url,
                     text_model=text_model,
+                    api_mode=api_mode,
                     text_enabled=text_enabled == "on",
                     make_active=make_active == "on",
                 )

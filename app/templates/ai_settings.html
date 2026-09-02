@@ -45,7 +45,7 @@
   <section class="panel settings-panel">
     <span class="eyebrow">PROVIDER 02</span>
     <h2>GPT / OpenAI 兼容中转 API</h2>
-    <p class="muted">适用于你现有的 OpenAI 兼容中转站。填写 Base URL 到 <code>/v1</code> 即可，系统会自动补上 <code>/chat/completions</code>。</p>
+    <p class="muted">适用于 OpenAI 兼容中转站。请选择服务商实际使用的接口模式，系统会自动补上对应的接口路径。</p>
     {% if test_provider == 'openai_compatible' %}
       {% if test_result == 'success' %}<div class="notice notice-success ai-test-result" role="status"><strong>测试成功。</strong>{{ openai_setting.text_model }} 可以使用{% if openai_setting.last_tested_at %} · 测试时间 {{ openai_setting.last_tested_at }}{% endif %}{% if openai_setting.is_active_text_provider %} · 已设为当前文本模型{% endif %}</div>
       {% else %}<div class="notice notice-error ai-test-result" role="alert"><strong>测试未完成。</strong>{{ openai_setting.last_error_summary or '请检查中转地址、模型名、API Key、额度或网络后重试。' }}</div>{% endif %}
@@ -53,7 +53,8 @@
     {% if openai_setting.key_masked %}<p class="safe-status">已安全配置：{{ openai_setting.key_masked }}</p>{% endif %}
     {% if openai_setting.connection_status == 'ready' %}<p class="safe-status">连接正常{% if openai_setting.last_tested_at %} · {{ openai_setting.last_tested_at }}{% endif %}</p>{% elif openai_setting.connection_status == 'error' %}<p class="notice notice-warning">连接需要处理：{{ openai_setting.last_error_summary }}</p>{% endif %}
     <form class="settings-form" method="post" action="/settings/ai/openai">
-      <label>API Base URL<input name="base_url" type="url" value="{{ openai_setting.base_url }}" placeholder="https://你的中转地址/v1" required></label>
+      <label>接口模式<select name="api_mode"><option value="chat_completions" {% if openai_setting.api_mode == 'chat_completions' %}selected{% endif %}>Chat Completions（自动补 /chat/completions）</option><option value="responses" {% if openai_setting.api_mode == 'responses' %}selected{% endif %}>Responses API（自动补 /responses）</option></select></label>
+      <label>API Base URL<input name="base_url" type="url" value="{{ openai_setting.base_url }}" placeholder="https://你的中转地址，按服务商文档填写" required></label>
       <label>GPT API Key<input name="api_key" type="password" autocomplete="new-password" placeholder="粘贴新的 API Key" required></label>
       <label>模型名<input name="text_model" value="{{ openai_setting.text_model }}" placeholder="例如：gpt-5.5" required></label>
       <label class="check-label"><input type="checkbox" name="text_enabled" {% if openai_setting.text_enabled %}checked{% endif %}> 启用 GPT 文本解析</label>

@@ -5,7 +5,9 @@ from app.models import AiProviderSetting
 from app.services.ai_settings import (
     AiSettingsService,
     CredentialNotConfiguredError,
+    OPENAI_API_MODE_RESPONSES,
     OPENAI_COMPATIBLE_PROVIDER,
+    OpenAICompatibleClient,
     mask_api_key,
 )
 
@@ -42,8 +44,10 @@ class FakeOpenAICompatibleClient:
     def test_connection(self, api_key: str, base_url: str, model: str) -> None:
         self.calls.append((api_key, base_url, model))
 
-    def complete(self, api_key: str, base_url: str, model: str, prompt: str) -> str:
-        self.calls.append((api_key, base_url, model, prompt))
+    def complete(
+        self, api_key: str, base_url: str, model: str, prompt: str, api_mode: str = "chat_completions"
+    ) -> str:
+        self.calls.append((api_key, base_url, model, prompt, api_mode))
         return '{"ok": true}'
 
 
@@ -169,7 +173,13 @@ def test_openai_compatible_provider_keeps_key_out_of_database_and_tests_its_conf
     assert "private" not in database_row.key_masked
     assert tested.connection_status == "ready"
     assert client.calls == [
-        ("sk-private-gpt-key-ABCD", "https://gateway.example.test/v1", "gpt-5.5")
+        (
+            "sk-private-gpt-key-ABCD",
+            "https://gateway.example.test/v1",
+            "gpt-5.5",
+            "Reply with exactly: OK",
+            "chat_completions",
+        )
     ]
 
 
@@ -192,5 +202,54 @@ def test_complete_text_uses_current_openai_compatible_provider():
 
     assert output == '{"ok": true}'
     assert client.calls == [
-        ("sk-private-gpt-key-ABCD", "https://gateway.example.test/v1", "gpt-5.5", "extract facts")
+        ("sk-private-gpt-key-ABCD", "https://gateway.example.test/v1", "gpt-5.5", "extract facts", "chat_completions")
     ]
+
+
+def test_openai_compatible_provider_persists_responses_api_mode():
+    session_factory = create_database("sqlite+pysqlite:///:memory:")
+    store = FakeCredentialStore()
+    service = AiSettingsService(store, openai_client=FakeOpenAICompatibleClient())
+
+    with session_factory() as session:
+        saved = service.save_openai_settings(
+            session,
+            api_key="sk-private-gpt-key-ABCD",
+            base_url="https://gateway.example.test",
+            text_model="gpt-5.6-terra",
+            api_mode=OPENAI_API_MODE_RESPONSES,
+            text_enabled=True,
+            make_active=True,
+        )
+
+    assert saved.api_mode == OPENAI_API_MODE_RESPONSES
+
+
+def test_responses_api_posts_to_responses_and_reads_output_text(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"output_text": '{"employer_name":"上海示例单位"}'}
+
+    def fake_post(url, **kwargs):
+        captured["url"] = url
+        captured["json"] = kwargs["json"]
+        return FakeResponse()
+
+    monkeypatch.setattr("app.services.ai_settings.httpx.post", fake_post)
+
+    output = OpenAICompatibleClient().complete(
+        "sk-private-gpt-key-ABCD",
+        "https://gateway.example.test",
+        "gpt-5.6-terra",
+        "提取招聘字段",
+        OPENAI_API_MODE_RESPONSES,
+    )
+
+    assert captured["url"] == "https://gateway.example.test/responses"
+    assert captured["json"]["input"] == "提取招聘字段"
+    assert output == '{"employer_name":"上海示例单位"}'

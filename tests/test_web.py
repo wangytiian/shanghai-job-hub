@@ -93,6 +93,8 @@ def test_ai_settings_page_offers_gpt_compatible_provider_controls():
     assert "GPT / OpenAI 兼容中转 API" in response.text
     assert "API Base URL" in response.text
     assert 'action="/settings/ai/openai"' in response.text
+    assert 'name="api_mode"' in response.text
+    assert "Responses API" in response.text
     assert "AI 只辅助生成草稿" in response.text
     assert "value=\"sk-" not in response.text
 
