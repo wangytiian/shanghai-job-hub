@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import ast
 from html import escape
 
 from sqlalchemy import select
@@ -28,6 +29,40 @@ def _line(label: str, value: str) -> str:
     if not _known(value):
         return ""
     return f'<p style="margin:7px 0;"><strong style="display:inline-block;min-width:92px;color:#102A43;">{escape(label)}</strong>｜{escape(value)}</p>'
+
+
+def _display_value(value: str) -> str:
+    """Keep imported JSON/Python list strings out of user-facing copy."""
+    cleaned = value.strip()
+    if not _known(cleaned):
+        return ""
+    if cleaned.startswith("[") and cleaned.endswith("]"):
+        try:
+            parsed = ast.literal_eval(cleaned)
+        except (SyntaxError, ValueError):
+            parsed = None
+        if isinstance(parsed, (list, tuple)):
+            return "、".join(str(item).strip() for item in parsed if str(item).strip())
+    return cleaned
+
+
+def _section_heading(title: str) -> str:
+    return (
+        '<div style="height:1px;margin:30px 0 24px;background:#E7E7E7;"></div>'
+        '<p style="margin:0 0 2px;text-align:center;font-family:Georgia,serif;font-size:13px;letter-spacing:.04em;">FINJOB</p>'
+        f'<h2 style="margin:0 0 20px;text-align:center;color:#111;font-size:25px;line-height:1.35;">{title}</h2>'
+    )
+
+
+def _fact_row(label: str, value: str) -> str:
+    readable = _display_value(value)
+    if not readable:
+        return ""
+    return (
+        '<p style="margin:8px 0;font-size:16px;line-height:1.8;">'
+        f'<strong style="display:inline-block;min-width:90px;color:#132D54;">{escape(label)}</strong>'
+        f'<span style="display:inline-block;margin:0 12px;color:#1F2937;">｜</span>{escape(readable)}</p>'
+    )
 
 
 def _application_copy(job: Job) -> tuple[str, str]:
@@ -62,51 +97,66 @@ def _application_copy(job: Job) -> tuple[str, str]:
 
 
 def build_wechat_draft(job: Job) -> WechatDraft:
-    """Render a compact, clipboard-ready article using only verified job fields."""
+    """Render the confirmed FINJOB-style, clipboard-ready WeChat article."""
     employer = escape(job.employer_name)
     job_title = escape(job.job_title)
     source_url = escape(job.source_url, quote=True)
     is_summary = job.posting_scope == "multi_role_announcement"
-    heading = "公告速览" if is_summary else "招聘速览"
-    introduction = (
-        f"{employer}发布了{job_title}。该公告包含多个岗位，请按已核验附件或官方公告查看具体岗位、条件与投递要求。"
+    audience = _display_value(job.target_audience)
+    directions = _display_value(job.direction_tags)
+    location = _display_value(job.location_detail)
+    deadline = _display_value(job.deadline)
+    opening = (
+        f"{employer}发布了{job_title}招聘信息。该公告包含多个岗位，请按已核验附件或官方公告确认具体岗位、条件与投递要求。"
         if is_summary
-        else f"{employer}正在招聘{job_title}。以下内容仅整理已核验的招聘事实，投递前请再次查看招聘单位官方公告。"
+        else f"{employer}正在招聘{job_title}。以下内容依据已核验的公开招聘事实整理，投递前请再次查看官方公告。"
     )
-    facts = "".join(
-        (_line("招聘单位", job.employer_name), _line("公告/岗位名称", job.job_title),
-         _line("招聘类型", job.recruitment_type), _line("工作地点", job.location_detail),
-         _line("适合人群", job.target_audience), _line("专业方向", job.direction_tags),
-         _line("申请截止", job.deadline))
-    )
+    overview = "".join((
+        _fact_row("招聘单位", job.employer_name),
+        _fact_row("招聘岗位", job.job_title),
+        _fact_row("招聘类型", job.recruitment_type),
+        _fact_row("工作地点", location),
+        _fact_row("申请截止", deadline),
+    ))
+    eligibility = "".join((
+        f'<p style="margin:8px 0;">• 适合人群：{escape(audience)}</p>' if audience else "",
+        f'<p style="margin:8px 0;">• 专业方向：{escape(directions)}</p>' if directions else "",
+    ))
     application_html, application_text = _application_copy(job)
-    draft_title = f"{job.employer_name}｜{job.job_title}"
+    draft_title = f"{job.employer_name}{job.job_title}招聘"
     digest_parts = [job.recruitment_type]
     if _known(job.location_detail):
         digest_parts.append(job.location_detail)
     if _known(job.deadline):
         digest_parts.append(f"截止 {job.deadline}")
     digest = "｜".join(digest_parts)
-    html = f'''<section style="max-width:677px;margin:0 auto;padding:8px 18px 28px;color:#17213A;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif;font-size:16px;line-height:1.85;box-sizing:border-box;">
-  <h1 style="margin:0 0 8px;color:#102A43;font-size:29px;line-height:1.35;font-weight:700;letter-spacing:0.02em;">{employer}｜{job_title}</h1>
-  <p style="margin:0 0 20px;color:#667085;font-size:14px;">沪上求职汇　｜　上海　｜　人工核验后生成</p>
-  <p style="margin:0 0 24px;">{introduction}</p>
-  <div style="height:1px;margin:28px 0;background:#D9E2EC;"></div>
-  <h2 style="margin:2px 0 18px;text-align:center;color:#102A43;font-size:23px;line-height:1.35;">{heading}</h2>
-  {facts}
-  <div style="height:1px;margin:28px 0;background:#D9E2EC;"></div>
-  <h2 style="margin:2px 0 16px;text-align:center;color:#102A43;font-size:23px;line-height:1.35;">如何投递</h2>
+    html = f'''<section style="max-width:677px;margin:0 auto;padding:10px 18px 32px;color:#161616;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Microsoft YaHei',sans-serif;font-size:16px;line-height:1.9;box-sizing:border-box;">
+  <h1 style="margin:0 0 8px;color:#111;font-size:30px;line-height:1.4;font-weight:700;letter-spacing:.01em;">{escape(draft_title)}</h1>
+  <p style="margin:0 0 18px;color:#6B7D9B;font-size:14px;">沪上求职汇　｜　上海　｜　已核验后生成</p>
+  <p style="margin:0 0 24px;">{opening}</p>
+  {_section_heading("招聘岗位")}
+  {overview}
+  {_section_heading("申请条件") if eligibility else ""}
+  {eligibility}
+  {_section_heading("如何投递")}
   {application_html}
-  <div style="height:1px;margin:28px 0 14px;background:#D9E2EC;"></div>
-  <p style="margin:5px 0;color:#667085;font-size:12px;">信息来源｜<a href="{source_url}" style="color:#667085;">招聘单位公开原文</a></p>
-  <p style="margin:5px 0;color:#667085;font-size:12px;">核验说明｜本稿由人工对照公开原文核验后生成；请以官方公告为准。</p>
-  <div style="height:1px;margin:18px 0;background:#D9E2EC;"></div>
+  <div style="height:1px;margin:28px 0 14px;background:#E7E7E7;"></div>
+  <p style="margin:5px 0;color:#7B869A;font-size:12px;">信息来源｜<a href="{source_url}" style="color:#7B869A;">招聘单位公开原文</a></p>
+  <p style="margin:5px 0;color:#7B869A;font-size:12px;">核验时间｜以本次人工审核记录为准</p>
+  <div style="height:1px;margin:18px 0;background:#E7E7E7;"></div>
   <p style="margin:0;text-align:center;color:#667085;font-size:12px;">面向青年求职者的非官方就业信息服务</p>
 </section>'''
-    plain_lines = [draft_title, "", f"招聘类型：{job.recruitment_type}"]
-    for label, value in (("地点", job.location_detail), ("适合人群", job.target_audience), ("专业方向", job.direction_tags), ("截止日期", job.deadline)):
-        if _known(value):
-            plain_lines.append(f"{label}：{value}")
+    plain_lines = [draft_title, "沪上求职汇｜上海｜已核验后生成", "", opening, "", "【招聘岗位】"]
+    for label, value in (("招聘单位", job.employer_name), ("招聘岗位", job.job_title), ("招聘类型", job.recruitment_type), ("工作地点", location), ("申请截止", deadline)):
+        readable = _display_value(value)
+        if readable:
+            plain_lines.append(f"{label}｜{readable}")
+    if eligibility:
+        plain_lines.extend(("", "【申请条件】"))
+        if audience:
+            plain_lines.append(f"• 适合人群：{audience}")
+        if directions:
+            plain_lines.append(f"• 专业方向：{directions}")
     plain_lines.extend(("", application_text, "", NON_OFFICIAL_NOTICE))
     return WechatDraft(title=draft_title, digest=digest, html=html, plain_text="\n".join(plain_lines))
 

@@ -65,18 +65,30 @@ def test_only_ab_intake_grades_can_enter_student_distribution(session, pending_r
         create_distribution_items(session, pending_review_job.id)
 
 
-def test_wechat_draft_uses_inline_styles_and_keeps_official_facts(session, pending_review_job):
+def test_wechat_draft_uses_the_confirmed_finjob_layout_and_keeps_official_facts(session, pending_review_job):
     draft = build_wechat_draft(pending_review_job)
 
-    assert draft.title == "示例金融集团｜财务分析实习生"
+    assert draft.title == "示例金融集团财务分析实习生招聘"
     assert pending_review_job.official_url in draft.html
-    assert "招聘速览" in draft.html
+    assert "FINJOB" in draft.html
+    assert "招聘岗位" in draft.html
+    assert "工作地点" in draft.html
+    assert "如何投递" in draft.html
     assert "沪上求职汇" in draft.html
     assert "AI辅助建议" not in draft.html
     assert "非官方就业信息服务" in draft.html
     assert "style=" in draft.html
     assert "class=" not in draft.html
+    assert "招聘速览" not in draft.html
     assert pending_review_job.official_url in draft.plain_text
+
+
+def test_wechat_draft_formats_list_like_values_as_human_readable_tags(session, pending_review_job):
+    pending_review_job.direction_tags = "['客户服务', '远程银行', '数字化运营']"
+    draft = build_wechat_draft(pending_review_job)
+
+    assert "客户服务、远程银行、数字化运营" in draft.html
+    assert "['客户服务'" not in draft.html
 
 
 def test_wechat_draft_for_email_application_uses_email_and_hides_unknown_location(session, pending_review_job):
@@ -99,7 +111,7 @@ def test_wechat_draft_for_checked_multi_role_announcement_uses_summary_copy(sess
 
     draft = build_wechat_draft(pending_review_job)
 
-    assert "公告速览" in draft.html
+    assert "招聘岗位" in draft.html
     assert "正在招聘财务分析实习生" not in draft.html
 
 

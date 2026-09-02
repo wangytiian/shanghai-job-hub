@@ -373,7 +373,7 @@ def test_public_queue_item_opens_a_copy_ready_wechat_draft_page():
     assert "复制公众号正文" in draft_page.text
     assert "复制标题" in draft_page.text
     assert "复制群消息" in draft_page.text
-    assert "招聘速览" in draft_page.text
+    assert "招聘岗位" in draft_page.text
 
 
 def test_review_endpoint_approves_a_valid_pending_job():
