@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Job, Source, TaskRun
+from app.services.intake_screening import screen_intake
 from app.services.collection_strategy import build_collection_plan
 from app.services.source_library import can_auto_collect
 from app.sources.catalog import ensure_official_source_catalog
@@ -106,6 +107,7 @@ def _save_detail(
     attachment_links = _attachment_links(detail)
     content_fingerprint = _content_fingerprint(f"{detail.evidence_text}\n{attachment_links}")
     if job is None:
+        intake = screen_intake(detail.title, detail.evidence_text)
         session.add(
             Job(
                 fingerprint=fingerprint,
@@ -131,6 +133,11 @@ def _save_detail(
                 lifecycle_status="正常",
                 last_change_summary="",
                 status="待核验",
+                intake_grade=intake.grade,
+                intake_route=intake.route,
+                intake_reason=intake.reason,
+                intake_evidence=intake.evidence,
+                intake_confidence=intake.confidence,
             )
         )
         return "created"
