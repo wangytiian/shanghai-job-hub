@@ -4,46 +4,55 @@
 <section class="page-heading">
   <span class="eyebrow">AI SETTINGS</span>
   <h1>AI 模型配置</h1>
-  <p>配置仅保存在这台电脑。AI 只辅助生成草稿，不能绕过人工核验和发布流程。</p>
+  <p>配置仅保存在这台电脑。AI 只辅助生成草稿、提炼内容，不能绕过人工核验与发布流程。</p>
 </section>
 
-{% if setting.connection_status == 'ready' %}
-<div class="notice notice-success">连接正常{% if setting.last_tested_at %} · 最近测试：{{ setting.last_tested_at }}{% endif %}</div>
-{% elif setting.connection_status == 'error' %}
-<div class="notice notice-warning">配置或连接需要处理：{{ setting.last_error_summary }}</div>
-{% elif setting.connection_status == 'not_configured' %}
-<div class="notice notice-info">尚未保存 API Key。保存后可测试连接。</div>
-{% endif %}
+<section class="panel settings-test-panel">
+  <span class="eyebrow">ACTIVE TEXT PROVIDER</span>
+  <h2>当前文本模型</h2>
+  <p class="muted">公告初筛、AI 预填和后续公众号内容提炼，都会使用这一套文本模型。OCR 始终使用 Qwen。</p>
+  <form class="button-group" method="post" action="/settings/ai/active">
+    <button class="button {% if bailian_setting.is_active_text_provider %}button-primary{% else %}button-secondary{% endif %}" name="provider" value="bailian" type="submit">{% if bailian_setting.is_active_text_provider %}当前使用：{% endif %}Qwen</button>
+    <button class="button {% if openai_setting.is_active_text_provider %}button-primary{% else %}button-secondary{% endif %}" name="provider" value="openai_compatible" type="submit">{% if openai_setting.is_active_text_provider %}当前使用：{% endif %}GPT 中转</button>
+  </form>
+</section>
 
 <div class="settings-grid">
   <section class="panel settings-panel">
-    <span class="eyebrow">PROVIDER</span>
-    <h2>阿里云百炼 API Key</h2>
-    <p class="muted">密钥将保存到 Windows 凭据管理器，不会写入本系统数据库。</p>
-    {% if setting.key_masked %}<p class="safe-status">已安全配置：{{ setting.key_masked }}</p>{% endif %}
+    <span class="eyebrow">PROVIDER 01</span>
+    <h2>阿里云百炼 / Qwen</h2>
+    <p class="muted">密钥保存到 Windows 凭据管理器，不会写入系统数据库。</p>
+    {% if bailian_setting.key_masked %}<p class="safe-status">已安全配置：{{ bailian_setting.key_masked }}</p>{% endif %}
+    {% if bailian_setting.connection_status == 'ready' %}<p class="safe-status">连接正常{% if bailian_setting.last_tested_at %} · {{ bailian_setting.last_tested_at }}{% endif %}</p>{% elif bailian_setting.connection_status == 'error' %}<p class="notice notice-warning">连接需要处理：{{ bailian_setting.last_error_summary }}</p>{% endif %}
     <form class="settings-form" method="post" action="/settings/ai/key">
       <label>百炼 API Key<input type="password" name="api_key" autocomplete="new-password" placeholder="粘贴新的 API Key" required></label>
       <button class="button button-primary" type="submit">安全保存</button>
     </form>
+    <form class="settings-form" method="post" action="/settings/ai/models">
+      <label>文本解析模型<select name="text_model"><option value="qwen3.7-flash" {% if bailian_setting.text_model == 'qwen3.7-flash' %}selected{% endif %}>qwen3.7-flash</option></select></label>
+      <label class="check-label"><input type="checkbox" name="text_enabled" {% if bailian_setting.text_enabled %}checked{% endif %}> 启用文本解析</label>
+      <label>图片 / PDF 识别模型<select name="ocr_model"><option value="qwen-vl-ocr" {% if bailian_setting.ocr_model == 'qwen-vl-ocr' %}selected{% endif %}>qwen-vl-ocr</option></select></label>
+      <label class="check-label"><input type="checkbox" name="ocr_enabled" {% if bailian_setting.ocr_enabled %}checked{% endif %}> 启用图片和 PDF OCR</label>
+      <button class="button button-secondary" type="submit">保存 Qwen 设置</button>
+    </form>
+    <form method="post" action="/settings/ai/test"><button class="button button-secondary" type="submit">测试 Qwen 连接</button></form>
   </section>
 
   <section class="panel settings-panel">
-    <span class="eyebrow">MODELS</span>
-    <h2>启用模型</h2>
-    <form class="settings-form" method="post" action="/settings/ai/models">
-      <label>文本解析模型<select name="text_model"><option value="qwen3.7-flash" {% if setting.text_model == 'qwen3.7-flash' %}selected{% endif %}>qwen3.7-flash</option></select></label>
-      <label class="check-label"><input type="checkbox" name="text_enabled" {% if setting.text_enabled %}checked{% endif %}> 启用文本解析</label>
-      <label>图片 / PDF 识别模型<select name="ocr_model"><option value="qwen-vl-ocr" {% if setting.ocr_model == 'qwen-vl-ocr' %}selected{% endif %}>qwen-vl-ocr</option></select></label>
-      <label class="check-label"><input type="checkbox" name="ocr_enabled" {% if setting.ocr_enabled %}checked{% endif %}> 启用图片和 PDF OCR</label>
-      <button class="button button-secondary" type="submit">保存模型设置</button>
+    <span class="eyebrow">PROVIDER 02</span>
+    <h2>GPT / OpenAI 兼容中转 API</h2>
+    <p class="muted">适用于你现有的 OpenAI 兼容中转站。填写 Base URL 到 <code>/v1</code> 即可，系统会自动补上 <code>/chat/completions</code>。</p>
+    {% if openai_setting.key_masked %}<p class="safe-status">已安全配置：{{ openai_setting.key_masked }}</p>{% endif %}
+    {% if openai_setting.connection_status == 'ready' %}<p class="safe-status">连接正常{% if openai_setting.last_tested_at %} · {{ openai_setting.last_tested_at }}{% endif %}</p>{% elif openai_setting.connection_status == 'error' %}<p class="notice notice-warning">连接需要处理：{{ openai_setting.last_error_summary }}</p>{% endif %}
+    <form class="settings-form" method="post" action="/settings/ai/openai">
+      <label>API Base URL<input name="base_url" type="url" value="{{ openai_setting.base_url }}" placeholder="https://你的中转地址/v1" required></label>
+      <label>GPT API Key<input name="api_key" type="password" autocomplete="new-password" placeholder="粘贴新的 API Key" required></label>
+      <label>模型名<input name="text_model" value="{{ openai_setting.text_model }}" placeholder="例如：gpt-5.5" required></label>
+      <label class="check-label"><input type="checkbox" name="text_enabled" {% if openai_setting.text_enabled %}checked{% endif %}> 启用 GPT 文本解析</label>
+      <label class="check-label"><input type="checkbox" name="make_active" {% if openai_setting.is_active_text_provider %}checked{% endif %}> 保存后设为当前文本模型</label>
+      <button class="button button-primary" type="submit">安全保存 GPT 设置</button>
     </form>
+    <form method="post" action="/settings/ai/openai/test"><button class="button button-secondary" type="submit">测试 GPT 中转连接</button></form>
   </section>
 </div>
-
-<section class="panel settings-panel settings-test-panel">
-  <span class="eyebrow">CONNECTION CHECK</span>
-  <h2>测试连接</h2>
-  <p class="muted">系统会用 <strong>{{ setting.text_model }}</strong> 发送一个极短测试请求，只验证密钥、网络与模型是否可用。</p>
-  <form method="post" action="/settings/ai/test"><button class="button button-primary" type="submit">测试连接</button></form>
-</section>
 {% endblock %}

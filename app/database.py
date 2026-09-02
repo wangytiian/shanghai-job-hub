@@ -27,6 +27,15 @@ def _upgrade_sqlite_columns(engine) -> None:
         return
     table_names = set(inspect(engine).get_table_names())
     upgrades = {
+        "distribution_items": {
+            "ai_content_json": "TEXT NOT NULL DEFAULT ''",
+            "ai_content_status": "VARCHAR(20) NOT NULL DEFAULT '基础稿'",
+            "ai_content_error": "TEXT NOT NULL DEFAULT ''",
+        },
+        "ai_provider_settings": {
+            "base_url": "VARCHAR(500) NOT NULL DEFAULT ''",
+            "is_active_text_provider": "BOOLEAN NOT NULL DEFAULT 0",
+        },
         "jobs": {
             "is_demo": "BOOLEAN NOT NULL DEFAULT 1",
             "collected_at": "DATETIME",

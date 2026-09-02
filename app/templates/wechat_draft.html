@@ -4,9 +4,10 @@
 <a class="back-link" href="/queues">← 返回内容队列</a>
 <section class="page-heading"><span class="eyebrow">WECHAT COPY DRAFT</span><h1>公众号复制稿</h1><p>复制后粘贴到公众号编辑器；当前不会调用公众号接口或自动发布。</p></section>
 {% if job.is_demo %}<div class="notice notice-warning"><strong>这是演示岗位草稿，仅用于测试复制和排版。</strong>正式发布前必须使用已审核的真实岗位。</div>{% endif %}
+{% if ai_feedback == 'success' %}<div class="notice notice-success"><strong>AI 内容提炼完成。</strong> {{ ai_message }}</div>{% elif ai_feedback == 'error' %}<div class="notice notice-warning"><strong>AI 内容提炼未完成。</strong> {{ ai_message }}</div>{% endif %}
 <section class="panel copy-tools">
-  <div><span class="eyebrow">PUBLISH PACKAGE</span><h2>{{ draft.title }}</h2><p>正文采用内联样式，复制时会同时写入富文本和纯文本两种格式。</p></div>
-  <div class="button-group"><button class="button button-secondary" type="button" data-copy-text="{{ draft.title }}">复制标题</button><button class="button button-secondary" type="button" data-copy-text="{{ draft.digest }}">复制摘要</button><button class="button button-primary" type="button" id="copy-wechat-body">复制公众号正文</button><button class="button button-secondary" type="button" data-copy-text="{{ group_message }}">复制群消息</button></div>
+  <div><span class="eyebrow">PUBLISH PACKAGE</span><h2>{{ draft.title }}</h2><p>当前：{{ item.ai_content_status }}。正文采用内联样式，复制时会同时写入富文本和纯文本两种格式。</p></div>
+  <div class="button-group"><form method="post" action="/distribution/{{ item.id }}/wechat/ai-content"><button class="button button-secondary" type="submit">AI 提炼正文并更新预览</button></form><button class="button button-secondary" type="button" data-copy-text="{{ draft.title }}">复制标题</button><button class="button button-secondary" type="button" data-copy-text="{{ draft.digest }}">复制摘要</button><button class="button button-primary" type="button" id="copy-wechat-body">复制公众号正文</button><button class="button button-secondary" type="button" data-copy-text="{{ group_message }}">复制群消息</button></div>
   <p class="copy-status" id="copy-status" aria-live="polite">建议：粘贴后检查标题、封面图，并将官方入口设置为“阅读原文”。</p>
 </section>
 <section class="wechat-preview-shell"><div class="wechat-preview-label">公众号正文预览</div><article id="wechat-copy-body" class="wechat-copy-body">{{ draft.html | safe }}</article></section>

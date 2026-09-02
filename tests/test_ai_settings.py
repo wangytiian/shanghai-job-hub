@@ -2,7 +2,12 @@ import pytest
 
 from app.database import create_database
 from app.models import AiProviderSetting
-from app.services.ai_settings import AiSettingsService, CredentialNotConfiguredError, mask_api_key
+from app.services.ai_settings import (
+    AiSettingsService,
+    CredentialNotConfiguredError,
+    OPENAI_COMPATIBLE_PROVIDER,
+    mask_api_key,
+)
 
 
 class FakeCredentialStore:
@@ -28,6 +33,18 @@ class FakeBailianClient:
         self.calls.append((api_key, model))
         if self.error:
             raise self.error
+
+
+class FakeOpenAICompatibleClient:
+    def __init__(self):
+        self.calls = []
+
+    def test_connection(self, api_key: str, base_url: str, model: str) -> None:
+        self.calls.append((api_key, base_url, model))
+
+    def complete(self, api_key: str, base_url: str, model: str, prompt: str) -> str:
+        self.calls.append((api_key, base_url, model, prompt))
+        return '{"ok": true}'
 
 
 def test_mask_api_key_exposes_only_last_four_characters():
@@ -86,6 +103,16 @@ def test_connection_requires_saved_key_without_calling_provider():
     assert client.calls == []
 
 
+def test_active_text_provider_is_not_ready_until_its_key_is_saved():
+    session_factory = create_database("sqlite+pysqlite:///:memory:")
+    service = AiSettingsService(FakeCredentialStore())
+
+    with session_factory() as session:
+        assert service.is_active_text_provider_ready(session) is False
+        service.save_api_key(session, "sk-private-test-key-ABCD")
+        assert service.is_active_text_provider_ready(session) is True
+
+
 def test_connection_marks_setting_ready_after_success():
     session_factory = create_database("sqlite+pysqlite:///:memory:")
     store = FakeCredentialStore()
@@ -116,3 +143,54 @@ def test_connection_sanitizes_secret_from_provider_failure():
     assert saved.connection_status == "error"
     assert secret not in saved.last_error_summary
     assert "authorization failed" in saved.last_error_summary
+
+
+def test_openai_compatible_provider_keeps_key_out_of_database_and_tests_its_config():
+    session_factory = create_database("sqlite+pysqlite:///:memory:")
+    store = FakeCredentialStore()
+    client = FakeOpenAICompatibleClient()
+    service = AiSettingsService(store, openai_client=client)
+
+    with session_factory() as session:
+        saved = service.save_openai_settings(
+            session,
+            api_key="sk-private-gpt-key-ABCD",
+            base_url="https://gateway.example.test/v1/",
+            text_model="gpt-5.5",
+            text_enabled=True,
+            make_active=True,
+        )
+        tested = service.test_connection(session, OPENAI_COMPATIBLE_PROVIDER)
+        database_row = session.get(AiProviderSetting, saved.id)
+
+    assert database_row.base_url == "https://gateway.example.test/v1"
+    assert database_row.key_masked == "****ABCD"
+    assert database_row.is_active_text_provider is True
+    assert "private" not in database_row.key_masked
+    assert tested.connection_status == "ready"
+    assert client.calls == [
+        ("sk-private-gpt-key-ABCD", "https://gateway.example.test/v1", "gpt-5.5")
+    ]
+
+
+def test_complete_text_uses_current_openai_compatible_provider():
+    session_factory = create_database("sqlite+pysqlite:///:memory:")
+    store = FakeCredentialStore()
+    client = FakeOpenAICompatibleClient()
+    service = AiSettingsService(store, openai_client=client)
+
+    with session_factory() as session:
+        service.save_openai_settings(
+            session,
+            api_key="sk-private-gpt-key-ABCD",
+            base_url="https://gateway.example.test/v1",
+            text_model="gpt-5.5",
+            text_enabled=True,
+            make_active=True,
+        )
+        output = service.complete_text(session, "extract facts")
+
+    assert output == '{"ok": true}'
+    assert client.calls == [
+        ("sk-private-gpt-key-ABCD", "https://gateway.example.test/v1", "gpt-5.5", "extract facts")
+    ]

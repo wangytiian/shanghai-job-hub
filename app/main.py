@@ -12,7 +12,13 @@ from sqlalchemy.orm import Session
 
 from app.database import create_database
 from app.models import DistributionItem, Job, ReviewLog, Source, TaskRun
-from app.services.ai_settings import AiSettingsService, CredentialNotConfiguredError, WindowsCredentialStore
+from app.services.ai_settings import (
+    AiSettingsService,
+    CredentialNotConfiguredError,
+    OPENAI_COMPATIBLE_PROVIDER,
+    TextProviderNotReadyError,
+    WindowsCredentialStore,
+)
 from app.services.collection_strategy import build_collection_plan
 from app.services.source_library import monitoring_message
 from app.seed import seed_demo_data
@@ -23,6 +29,7 @@ from app.services.reviews import review_job
 from app.services.jobs import validate_publishable
 from app.services.structuring import StructuringInput, StructuringValidationError, structure_job
 from app.services.ai_structuring import build_structuring_prompt, parse_ai_draft
+from app.services.ai_content_draft import build_content_prompt, parse_content_draft
 from app.services.notice_classification import (
     classify_job,
     confirm_suggested_new_recruitments,
@@ -62,15 +69,13 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
         return app.state.ai_settings_service
 
     def configured_intake_ai_complete(session: Session):
-        """Return a server-side Qwen callback only when text AI is enabled locally."""
+        """Return a callback for the currently selected, locally configured text AI."""
         service = get_ai_settings_service()
-        setting = service.get_setting(session)
-        api_key = service.credential_store.get_secret()
-        if not setting.text_enabled or not api_key:
+        if not service.is_active_text_provider_ready(session):
             return None
 
         def complete(prompt: str) -> str:
-            return service.bailian_client.complete(api_key, setting.text_model, prompt)
+            return service.complete_text(session, prompt)
 
         return complete
 
@@ -288,11 +293,17 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
     @app.get("/settings/ai")
     def ai_settings(request: Request):
         with get_session() as session:
-            setting = get_ai_settings_service().get_setting(session)
+            bailian_setting, openai_setting = get_ai_settings_service().get_all_settings(session)
             return templates.TemplateResponse(
                 request,
                 "ai_settings.html",
-                page_context(session, "ai_settings", setting=setting),
+                page_context(
+                    session,
+                    "ai_settings",
+                    setting=bailian_setting,
+                    bailian_setting=bailian_setting,
+                    openai_setting=openai_setting,
+                ),
             )
 
     @app.post("/settings/ai/key")
@@ -338,6 +349,55 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
             except CredentialNotConfiguredError as exc:
                 setting = get_ai_settings_service().get_setting(session)
                 setting.connection_status = "not_configured"
+                setting.last_error_summary = str(exc)[:300]
+                session.commit()
+        return RedirectResponse("/settings/ai", status_code=303)
+
+    @app.post("/settings/ai/openai")
+    def save_openai_ai_settings(
+        api_key: str = Form(),
+        base_url: str = Form(),
+        text_model: str = Form(),
+        text_enabled: str | None = Form(None),
+        make_active: str | None = Form(None),
+    ):
+        with get_session() as session:
+            try:
+                get_ai_settings_service().save_openai_settings(
+                    session,
+                    api_key=api_key,
+                    base_url=base_url,
+                    text_model=text_model,
+                    text_enabled=text_enabled == "on",
+                    make_active=make_active == "on",
+                )
+            except (ValueError, RuntimeError) as exc:
+                setting = get_ai_settings_service().get_setting(session, OPENAI_COMPATIBLE_PROVIDER)
+                setting.connection_status = "error"
+                setting.last_error_summary = str(exc)[:300]
+                session.commit()
+        return RedirectResponse("/settings/ai", status_code=303)
+
+    @app.post("/settings/ai/openai/test")
+    def test_openai_ai_connection():
+        with get_session() as session:
+            try:
+                get_ai_settings_service().test_connection(session, OPENAI_COMPATIBLE_PROVIDER)
+            except (CredentialNotConfiguredError, TextProviderNotReadyError) as exc:
+                setting = get_ai_settings_service().get_setting(session, OPENAI_COMPATIBLE_PROVIDER)
+                setting.connection_status = "not_configured"
+                setting.last_error_summary = str(exc)[:300]
+                session.commit()
+        return RedirectResponse("/settings/ai", status_code=303)
+
+    @app.post("/settings/ai/active")
+    def set_active_ai_provider(provider: str = Form()):
+        with get_session() as session:
+            try:
+                get_ai_settings_service().set_active_text_provider(session, provider)
+            except (ValueError, CredentialNotConfiguredError, TextProviderNotReadyError) as exc:
+                setting = get_ai_settings_service().get_setting(session, provider if provider == OPENAI_COMPATIBLE_PROVIDER else "bailian")
+                setting.connection_status = "error"
                 setting.last_error_summary = str(exc)[:300]
                 session.commit()
         return RedirectResponse("/settings/ai", status_code=303)
@@ -437,15 +497,13 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
             if job is None or job.status != "待核验" or job.notice_type != "新招聘":
                 raise HTTPException(409, "只有确认为新招聘的待核验公告可以使用 AI 预填")
             service = get_ai_settings_service()
-            api_key = service.credential_store.get_secret()
-            if not api_key:
+            if not service.is_active_text_provider_ready(session):
                 return RedirectResponse(
                     url=f"/jobs/{job_id}/structure?{urlencode({'ai_feedback': 'error', 'ai_message': '尚未完成 AI 服务配置，请前往 AI 模型配置页面保存密钥。'})}",
                     status_code=303,
                 )
-            setting = service.get_setting(session)
             try:
-                content = service.bailian_client.complete(api_key, setting.text_model, build_structuring_prompt(job.job_title, job.source_url, job.evidence_text))
+                content = service.complete_text(session, build_structuring_prompt(job.job_title, job.source_url, job.evidence_text))
                 draft = parse_ai_draft(content, job.evidence_text)
             except Exception as exc:
                 return RedirectResponse(
@@ -711,7 +769,7 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
             )
 
     @app.get("/distribution/{item_id}/wechat")
-    def wechat_draft(request: Request, item_id: int):
+    def wechat_draft(request: Request, item_id: int, ai_feedback: str = "", ai_message: str = ""):
         with get_session() as session:
             item = session.get(DistributionItem, item_id)
             if item is None or item.channel != "公众号":
@@ -725,6 +783,7 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
                     DistributionItem.channel == "微信群",
                 )
             )
+            content_draft = parse_content_draft(item.ai_content_json, job) if item.ai_content_json else None
             return templates.TemplateResponse(
                 request,
                 "wechat_draft.html",
@@ -733,10 +792,41 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
                     "queues",
                     item=item,
                     job=job,
-                    draft=build_wechat_draft(job),
+                    draft=build_wechat_draft(job, content_draft),
                     group_message=group_item.content if group_item else "微信群消息尚未生成",
+                    ai_feedback=ai_feedback,
+                    ai_message=ai_message,
                 ),
             )
+
+    @app.post("/distribution/{item_id}/wechat/ai-content")
+    def refine_wechat_draft_with_ai(item_id: int):
+        with get_session() as session:
+            item = session.get(DistributionItem, item_id)
+            if item is None or item.channel != "公众号":
+                raise HTTPException(404, "公众号草稿不存在")
+            job = session.get(Job, item.job_id)
+            if job is None:
+                raise HTTPException(404, "对应岗位不存在")
+            try:
+                content = get_ai_settings_service().complete_text(session, build_content_prompt(job))
+                draft = parse_content_draft(content, job)
+                if not any((draft.company_intro, draft.role_summary, draft.eligibility, draft.career_advice, draft.apply_tip)):
+                    raise ValueError("AI 返回内容没有通过事实校验，已保留基础稿")
+                item.ai_content_json = content
+                item.ai_content_status = "AI 已提炼"
+                item.ai_content_error = ""
+                session.commit()
+                feedback, message = "success", "AI 内容已提炼并套入固定公众号模板，请检查后复制。"
+            except Exception:
+                item.ai_content_status = "基础稿"
+                item.ai_content_error = "AI 提炼未完成，已保留基础稿。请检查当前模型、额度或网络后再试。"
+                session.commit()
+                feedback, message = "error", item.ai_content_error
+        return RedirectResponse(
+            url=f"/distribution/{item_id}/wechat?{urlencode({'ai_feedback': feedback, 'ai_message': message})}",
+            status_code=303,
+        )
 
     return app
 

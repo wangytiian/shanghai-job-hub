@@ -103,6 +103,9 @@ class DistributionItem(Base):
     channel: Mapped[str] = mapped_column(String(20), nullable=False)
     audience_group: Mapped[str] = mapped_column(String(60), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    ai_content_json: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    ai_content_status: Mapped[str] = mapped_column(String(20), default="基础稿", nullable=False)
+    ai_content_error: Mapped[str] = mapped_column(Text, default="", nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="待发送", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
 
@@ -122,9 +125,11 @@ class AiProviderSetting(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     provider: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
+    base_url: Mapped[str] = mapped_column(String(500), default="", nullable=False)
     text_model: Mapped[str] = mapped_column(String(80), nullable=False)
     ocr_model: Mapped[str] = mapped_column(String(80), nullable=False)
     text_enabled: Mapped[bool] = mapped_column(default=True, nullable=False)
+    is_active_text_provider: Mapped[bool] = mapped_column(default=False, nullable=False)
     ocr_enabled: Mapped[bool] = mapped_column(default=True, nullable=False)
     key_masked: Mapped[str] = mapped_column(String(20), default="", nullable=False)
     connection_status: Mapped[str] = mapped_column(String(30), default="not_configured", nullable=False)

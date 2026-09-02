@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import DistributionItem, Job
+from app.services.ai_content_draft import ContentDraft
 from app.services.jobs import UNSPECIFIED_DEADLINE
 
 
@@ -96,7 +97,7 @@ def _application_copy(job: Job) -> tuple[str, str]:
     )
 
 
-def build_wechat_draft(job: Job) -> WechatDraft:
+def build_wechat_draft(job: Job, content_draft: ContentDraft | None = None) -> WechatDraft:
     """Render the confirmed FINJOB-style, clipboard-ready WeChat article."""
     employer = escape(job.employer_name)
     job_title = escape(job.job_title)
@@ -106,11 +107,13 @@ def build_wechat_draft(job: Job) -> WechatDraft:
     directions = _display_value(job.direction_tags)
     location = _display_value(job.location_detail)
     deadline = _display_value(job.deadline)
+    ai_content = content_draft or ContentDraft()
     opening = (
         f"{employer}发布了{job_title}招聘信息。该公告包含多个岗位，请按已核验附件或官方公告确认具体岗位、条件与投递要求。"
         if is_summary
         else f"{employer}正在招聘{job_title}。以下内容依据已核验的公开招聘事实整理，投递前请再次查看官方公告。"
     )
+    opening = ai_content.company_intro or opening
     overview = "".join((
         _fact_row("招聘单位", job.employer_name),
         _fact_row("招聘岗位", job.job_title),
@@ -121,8 +124,15 @@ def build_wechat_draft(job: Job) -> WechatDraft:
     eligibility = "".join((
         f'<p style="margin:8px 0;">• 适合人群：{escape(audience)}</p>' if audience else "",
         f'<p style="margin:8px 0;">• 专业方向：{escape(directions)}</p>' if directions else "",
+        f'<p style="margin:8px 0;">• {escape(ai_content.eligibility)}</p>' if ai_content.eligibility else "",
     ))
     application_html, application_text = _application_copy(job)
+    role = ai_content.role_summary or (
+        f"岗位方向为{directions}。请查看官方原文，确认具体职责、部门安排及岗位要求。"
+        if directions else "请查看官方原文，确认具体职责、部门安排及岗位要求。"
+    )
+    career_advice = ai_content.career_advice or "投递前建议结合岗位方向，整理课程项目、实习或社团经历，突出与岗位相关的能力。"
+    apply_tip = ai_content.apply_tip or "投递前请再次核对官方公告中的材料、入口和时间要求。"
     draft_title = f"{job.employer_name}{job.job_title}招聘"
     digest_parts = [job.recruitment_type]
     if _known(job.location_detail):
@@ -134,11 +144,16 @@ def build_wechat_draft(job: Job) -> WechatDraft:
   <h1 style="margin:0 0 8px;color:#111;font-size:30px;line-height:1.4;font-weight:700;letter-spacing:.01em;">{escape(draft_title)}</h1>
   <p style="margin:0 0 18px;color:#6B7D9B;font-size:14px;">沪上求职汇　｜　上海　｜　已核验后生成</p>
   <p style="margin:0 0 24px;">{opening}</p>
-  {_section_heading("招聘岗位")}
+  {_section_heading("招聘速览").replace('FINJOB', 'OVERVIEW')}
   {overview}
-  {_section_heading("申请条件") if eligibility else ""}
+  {_section_heading("岗位内容").replace('FINJOB', 'ROLE')}
+  <p style="margin:0;white-space:pre-line;">{escape(role)}</p>
+  {_section_heading("申请条件").replace('FINJOB', 'ELIGIBILITY') if eligibility else ""}
   {eligibility}
-  {_section_heading("如何投递")}
+  {_section_heading("求职建议").replace('FINJOB', 'CAREER GUIDE')}
+  <p style="margin:0;">{escape(career_advice)}</p>
+  {_section_heading("如何投递").replace('FINJOB', 'APPLY')}
+  <p style="margin:0 0 12px;">{escape(apply_tip)}</p>
   {application_html}
   <div style="height:1px;margin:28px 0 14px;background:#E7E7E7;"></div>
   <p style="margin:5px 0;color:#7B869A;font-size:12px;">信息来源｜<a href="{source_url}" style="color:#7B869A;">招聘单位公开原文</a></p>
@@ -146,7 +161,7 @@ def build_wechat_draft(job: Job) -> WechatDraft:
   <div style="height:1px;margin:18px 0;background:#E7E7E7;"></div>
   <p style="margin:0;text-align:center;color:#667085;font-size:12px;">面向青年求职者的非官方就业信息服务</p>
 </section>'''
-    plain_lines = [draft_title, "沪上求职汇｜上海｜已核验后生成", "", opening, "", "【招聘岗位】"]
+    plain_lines = [draft_title, "沪上求职汇｜上海｜已核验后生成", "", opening, "", "【招聘速览】"]
     for label, value in (("招聘单位", job.employer_name), ("招聘岗位", job.job_title), ("招聘类型", job.recruitment_type), ("工作地点", location), ("申请截止", deadline)):
         readable = _display_value(value)
         if readable:
@@ -157,7 +172,7 @@ def build_wechat_draft(job: Job) -> WechatDraft:
             plain_lines.append(f"• 适合人群：{audience}")
         if directions:
             plain_lines.append(f"• 专业方向：{directions}")
-    plain_lines.extend(("", application_text, "", NON_OFFICIAL_NOTICE))
+    plain_lines.extend(("", "【岗位内容】", role, "", "【求职建议】", career_advice, "", "【如何投递】", apply_tip, application_text, "", NON_OFFICIAL_NOTICE))
     return WechatDraft(title=draft_title, digest=digest, html=html, plain_text="\n".join(plain_lines))
 
 

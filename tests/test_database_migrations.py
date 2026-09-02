@@ -83,6 +83,8 @@ def test_database_creates_safe_ai_provider_settings_table_without_api_key(tmp_pa
         "connection_status",
         "last_tested_at",
         "last_error_summary",
+        "base_url",
+        "is_active_text_provider",
     }.issubset(columns)
     assert "api_key" not in columns
     assert saved == "existing-record"

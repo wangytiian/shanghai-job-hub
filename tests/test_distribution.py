@@ -70,7 +70,7 @@ def test_wechat_draft_uses_the_confirmed_finjob_layout_and_keeps_official_facts(
 
     assert draft.title == "示例金融集团财务分析实习生招聘"
     assert pending_review_job.official_url in draft.html
-    assert "FINJOB" in draft.html
+    assert "OVERVIEW" in draft.html
     assert "招聘岗位" in draft.html
     assert "工作地点" in draft.html
     assert "如何投递" in draft.html
@@ -79,7 +79,7 @@ def test_wechat_draft_uses_the_confirmed_finjob_layout_and_keeps_official_facts(
     assert "非官方就业信息服务" in draft.html
     assert "style=" in draft.html
     assert "class=" not in draft.html
-    assert "招聘速览" not in draft.html
+    assert "招聘速览" in draft.html
     assert pending_review_job.official_url in draft.plain_text
 
 
@@ -122,3 +122,24 @@ def test_wechat_draft_explains_unstated_deadline(session, pending_review_job):
 
     assert "建议尽快查看官方原文或附件确认报名安排" in draft.html
     assert "请在截止日期前" not in draft.html
+
+
+def test_wechat_draft_renders_ai_content_in_finjob_sections(session, pending_review_job):
+    from app.services.ai_content_draft import ContentDraft
+
+    draft = build_wechat_draft(
+        pending_review_job,
+        ContentDraft(
+            company_intro="示例金融集团发布了本次实习机会。",
+            role_summary="该岗位围绕财务分析相关工作展开。",
+            eligibility="面向大三实习同学，会计审计、金融银行方向可关注。",
+            career_advice="投递前整理课程项目和实习经历，突出分析能力。",
+            apply_tip="请以官方公告要求准备投递材料。",
+        ),
+    )
+
+    assert "OVERVIEW" in draft.html
+    assert "ROLE" in draft.html
+    assert "ELIGIBILITY" in draft.html
+    assert "CAREER GUIDE" in draft.html
+    assert "该岗位围绕财务分析相关工作展开" in draft.html

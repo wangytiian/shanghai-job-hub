@@ -82,6 +82,17 @@ def test_ai_settings_page_has_safe_model_controls_and_no_secret_value():
     assert "qwen3.7-flash" in response.text
     assert "qwen-vl-ocr" in response.text
     assert 'type="password"' in response.text
+
+
+def test_ai_settings_page_offers_gpt_compatible_provider_controls():
+    client = TestClient(create_app_with_fake_ai_settings())
+
+    response = client.get("/settings/ai")
+
+    assert response.status_code == 200
+    assert "GPT / OpenAI 兼容中转 API" in response.text
+    assert "API Base URL" in response.text
+    assert 'action="/settings/ai/openai"' in response.text
     assert "AI 只辅助生成草稿" in response.text
     assert "value=\"sk-" not in response.text
 
@@ -374,6 +385,17 @@ def test_public_queue_item_opens_a_copy_ready_wechat_draft_page():
     assert "复制标题" in draft_page.text
     assert "复制群消息" in draft_page.text
     assert "招聘岗位" in draft_page.text
+
+
+def test_wechat_draft_page_offers_ai_content_refinement_before_copying():
+    client = TestClient(create_app("sqlite+pysqlite:///:memory:"))
+    client.post("/jobs/1/review", data={"action": "approve", "note": "页面测试"})
+    client.post("/jobs/1/distribution", follow_redirects=False)
+
+    draft_page = client.get("/distribution/1/wechat")
+
+    assert 'action="/distribution/1/wechat/ai-content"' in draft_page.text
+    assert "AI 提炼正文并更新预览" in draft_page.text
 
 
 def test_review_endpoint_approves_a_valid_pending_job():
