@@ -350,6 +350,8 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
                 if intake_grade not in {"A", "B", "C", "D"}:
                     raise HTTPException(400, "入库分级筛选无效")
                 statement = statement.where(Job.intake_grade == intake_grade)
+            elif data_type == "real":
+                statement = statement.where(Job.intake_grade != "D")
             normalized_query = query.strip()
             if normalized_query:
                 statement = statement.where(
