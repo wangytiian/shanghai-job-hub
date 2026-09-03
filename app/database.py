@@ -61,6 +61,12 @@ def _upgrade_sqlite_columns(engine) -> None:
             "intake_confidence": "VARCHAR(10) NOT NULL DEFAULT '低'",
             "attachment_links": "TEXT NOT NULL DEFAULT '[]'",
             "parent_job_id": "INTEGER",
+            "ai_suggested_score": "INTEGER NOT NULL DEFAULT 0",
+            "ai_score_status": "VARCHAR(30) NOT NULL DEFAULT '待建议'",
+            "ai_score_reason": "TEXT NOT NULL DEFAULT ''",
+            "ai_score_breakdown": "TEXT NOT NULL DEFAULT '{}'",
+            "ai_score_confidence": "VARCHAR(10) NOT NULL DEFAULT '低'",
+            "ai_scored_at": "DATETIME",
         },
         "sources": {
             "adapter_key": "VARCHAR(60) NOT NULL DEFAULT ''",

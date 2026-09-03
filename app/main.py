@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+from datetime import datetime
 from urllib.parse import urlencode
 
 import httpx
@@ -42,6 +43,7 @@ from app.services.publication_safety import return_unsafe_publishable_jobs
 from app.services.deadline_policy import expire_known_deadline_jobs
 from app.services.attachment_parser import create_pending_child_jobs, parse_xlsx_role_candidates
 from app.services.intake_backfill import backfill_unscreened_intake_jobs
+from app.services.ai_scoring import suggest_job_score
 
 APP_DIR = Path(__file__).parent
 DATA_DIR = APP_DIR.parent / "data"
@@ -427,6 +429,7 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
         intake_grade: str = "",
         query: str = "",
         classification_feedback: str = "",
+        scoring_feedback: str = "",
     ):
         with get_session() as session:
             if data_type not in {"real", "demo", "all"}:
@@ -460,6 +463,18 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
                 if data_type == "real" and status in {"", "待核验"}
                 else 0
             )
+            suggested_score_candidate_count = session.scalar(
+                select(func.count())
+                .select_from(Job)
+                .where(
+                    Job.is_demo.is_(False),
+                    Job.status == "待核验",
+                    Job.notice_type == "新招聘",
+                    Job.intake_grade.in_(("A", "B", "C")),
+                    Job.quality_score == 0,
+                    Job.ai_score_status == "待建议",
+                )
+            ) or 0
             return templates.TemplateResponse(
                 request,
                 "jobs.html",
@@ -472,9 +487,54 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
                     selected_data_type=data_type,
                     query=normalized_query,
                     suggested_new_recruitment_count=suggested_new_recruitment_count,
+                    suggested_score_candidate_count=suggested_score_candidate_count,
                     classification_feedback=classification_feedback,
+                    scoring_feedback=scoring_feedback,
                 ),
             )
+
+    @app.post("/jobs/scoring/suggest-batch")
+    def suggest_scores_batch():
+        with get_session() as session:
+            candidates = session.scalars(
+                select(Job)
+                .where(
+                    Job.is_demo.is_(False),
+                    Job.status == "待核验",
+                    Job.notice_type == "新招聘",
+                    Job.intake_grade.in_(("A", "B", "C")),
+                    Job.quality_score == 0,
+                    Job.ai_score_status == "待建议",
+                )
+                .order_by(Job.intake_grade.asc(), Job.collected_at.desc(), Job.id.desc())
+                .limit(5)
+            ).all()
+            complete = configured_intake_ai_complete(session)
+            ai_count = 0
+            rules_count = 0
+            for job in candidates:
+                result = suggest_job_score(job, complete=complete)
+                job.ai_suggested_score = result.score
+                job.ai_score_status = result.status
+                job.ai_score_reason = result.reason
+                job.ai_score_breakdown = json.dumps(result.breakdown, ensure_ascii=False)
+                job.ai_score_confidence = result.confidence
+                job.ai_scored_at = datetime.now()
+                if result.status == "AI建议":
+                    ai_count += 1
+                elif result.status == "规则建议":
+                    rules_count += 1
+                session.add(
+                    ReviewLog(
+                        job_id=job.id,
+                        action="AI建议分生成",
+                        note=f"建议分：{result.score}；状态：{result.status}；理由：{result.reason}",
+                        operator_name="本地管理员",
+                    )
+                )
+            session.commit()
+        message = f"本批处理 {len(candidates)} 条：AI 建议 {ai_count} 条，规则建议 {rules_count} 条。"
+        return RedirectResponse(f"/jobs?{urlencode({'scoring_feedback': message})}", status_code=303)
 
     @app.get("/jobs/{job_id}")
     def job_detail(request: Request, job_id: int):

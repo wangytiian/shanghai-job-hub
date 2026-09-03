@@ -8,6 +8,7 @@
 </section>
 
 {% if classification_feedback %}<div class="notice notice-success" role="status"><strong>公告分类已处理。</strong>{{ classification_feedback }}</div>{% endif %}
+{% if scoring_feedback %}<div class="notice notice-success" role="status"><strong>建议分批处理完成。</strong>{{ scoring_feedback }} 建议分不等于最终质量分，仍需人工确认。</div>{% endif %}
 
 {% if suggested_new_recruitment_count %}
 <section class="panel section-block batch-classification-panel">
@@ -16,6 +17,17 @@
   <p>当前有 <strong>{{ suggested_new_recruitment_count }}</strong> 条真实待核验公告，规则明确建议为“新招聘”。此操作不会处理体检、面试、公示等招聘进度通知。</p>
   <form method="post" action="/jobs/classification/confirm-suggestions" onsubmit="return confirm('确认将这 {{ suggested_new_recruitment_count }} 条系统建议的新招聘标记为“新招聘”吗？每条都会留下审核记录。');">
     <button class="button button-primary" type="submit">批量确认 {{ suggested_new_recruitment_count }} 条系统建议的新招聘</button>
+  </form>
+</section>
+{% endif %}
+
+{% if suggested_score_candidate_count %}
+<section class="panel section-block batch-classification-panel">
+  <span class="eyebrow">AI SUGGESTED SCORE</span>
+  <h2>待生成建议分</h2>
+  <p>当前有 <strong>{{ suggested_score_candidate_count }}</strong> 条 A/B/C 级真实新招聘待生成建议分。每次最多处理 5 条；AI 只能给出建议和原文依据，不会修改最终质量分或自动发布。规则建议需人工复核，不会被系统反复扣费重试。</p>
+  <form method="post" action="/jobs/scoring/suggest-batch" onsubmit="return confirm('确认生成本批最多 5 条岗位的 AI 建议分吗？');">
+    <button class="button button-primary" type="submit">批量生成建议分（最多 5 条）</button>
   </form>
 </section>
 {% endif %}
@@ -39,14 +51,15 @@
 {% if jobs %}
 <div class="responsive-table desktop-only">
   <table>
-    <thead><tr><th>单位 / 岗位</th><th>数据属性</th><th>初筛</th><th>类型</th><th>适合人群</th><th>拉取时间</th><th>质量</th><th>状态</th></tr></thead>
+    <thead><tr><th>单位 / 岗位</th><th>数据属性</th><th>初筛</th><th>类型</th><th>适合人群</th><th>拉取时间</th><th>建议分</th><th>最终质量</th><th>状态</th></tr></thead>
     <tbody>{% for job in jobs %}<tr>
       <td class="job-name"><a href="/jobs/{{ job.id }}">{{ job.employer_name }}<strong>{{ job.job_title }}</strong></a></td>
       <td><span class="data-badge {% if job.is_demo %}data-demo{% else %}data-real{% endif %}">{% if job.is_demo %}演示数据{% else %}真实线索{% endif %}</span></td>
       <td><strong>{{ job.intake_grade }}</strong><small class="table-secondary">{{ job.intake_route }}</small></td>
       <td>{{ job.recruitment_type }}</td><td>{{ job.target_audience }}</td>
       <td>{% if job.is_demo %}<span class="muted">演示初始化</span>{% elif job.collected_at %}{{ job.collected_at.strftime('%Y-%m-%d %H:%M') }}{% else %}<span class="muted">未记录</span>{% endif %}</td>
-      <td>{% if job.quality_score == 0 and job.status == '待核验' %}<span class="muted">未评分</span>{% else %}<strong>{{ job.quality_score }}</strong>{% endif %}</td>
+      <td>{% if job.ai_suggested_score %}<strong>{{ job.ai_suggested_score }}</strong><small class="table-secondary">{{ job.ai_score_status }}</small>{% else %}<span class="muted">待建议</span>{% endif %}</td>
+      <td>{% if job.quality_score == 0 %}<span class="muted">未确认</span>{% else %}<strong>{{ job.quality_score }}</strong>{% endif %}</td>
       <td><span class="status-badge">{{ job.status }}</span></td>
     </tr>{% endfor %}</tbody>
   </table>
@@ -55,7 +68,7 @@
   {% for job in jobs %}<article class="job-card">
     <div class="job-card-top"><span class="data-badge {% if job.is_demo %}data-demo{% else %}data-real{% endif %}">{% if job.is_demo %}演示数据{% else %}真实线索{% endif %}</span><span class="status-badge">{{ job.status }}</span></div>
     <a class="job-card-title" href="/jobs/{{ job.id }}"><small>{{ job.employer_name }}</small><strong>{{ job.job_title }}</strong></a>
-    <dl><div><dt>初筛</dt><dd>{{ job.intake_grade }}｜{{ job.intake_route }}</dd></div><div><dt>类型</dt><dd>{{ job.recruitment_type }}</dd></div><div><dt>人群</dt><dd>{{ job.target_audience }}</dd></div><div><dt>拉取时间</dt><dd>{% if job.is_demo %}演示初始化{% elif job.collected_at %}{{ job.collected_at.strftime('%Y-%m-%d %H:%M') }}{% else %}未记录{% endif %}</dd></div><div><dt>质量</dt><dd>{% if job.quality_score == 0 and job.status == '待核验' %}未评分{% else %}{{ job.quality_score }}{% endif %}</dd></div></dl>
+    <dl><div><dt>初筛</dt><dd>{{ job.intake_grade }}｜{{ job.intake_route }}</dd></div><div><dt>类型</dt><dd>{{ job.recruitment_type }}</dd></div><div><dt>人群</dt><dd>{{ job.target_audience }}</dd></div><div><dt>拉取时间</dt><dd>{% if job.is_demo %}演示初始化{% elif job.collected_at %}{{ job.collected_at.strftime('%Y-%m-%d %H:%M') }}{% else %}未记录{% endif %}</dd></div><div><dt>建议分</dt><dd>{% if job.ai_suggested_score %}{{ job.ai_suggested_score }}｜{{ job.ai_score_status }}{% else %}待建议{% endif %}</dd></div><div><dt>最终质量</dt><dd>{% if job.quality_score == 0 %}未确认{% else %}{{ job.quality_score }}{% endif %}</dd></div></dl>
   </article>{% endfor %}
 </div>
 {% else %}

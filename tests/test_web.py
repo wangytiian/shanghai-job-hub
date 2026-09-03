@@ -3,6 +3,7 @@ import subprocess
 from datetime import datetime
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from app.main import DEFAULT_DATABASE_PATH, create_app
 from app.models import Job, ReviewLog
@@ -27,6 +28,14 @@ class FakeCredentialStore:
 class FakeBailianClient:
     def test_connection(self, api_key: str, model: str) -> None:
         return None
+
+
+class FakeScoringBailianClient(FakeBailianClient):
+    def complete(self, api_key: str, model: str, prompt: str) -> str:
+        return (
+            '{"student_fit_points":20,"value_points":7,'
+            '"reason":"明确面向应届生。","evidence":"应届生","confidence":"高"}'
+        )
 
 
 def create_app_with_fake_ai_settings():
@@ -97,6 +106,58 @@ def test_ai_settings_page_offers_gpt_compatible_provider_controls():
     assert "Responses API" in response.text
     assert "AI 只辅助生成草稿" in response.text
     assert "value=\"sk-" not in response.text
+
+
+def test_jobs_page_separates_ai_suggested_score_from_human_final_score():
+    client = TestClient(create_app("sqlite+pysqlite:///:memory:"))
+
+    response = client.get("/jobs?data_type=all")
+
+    assert response.status_code == 200
+    assert "建议分" in response.text
+    assert "最终质量" in response.text
+
+
+def test_suggested_score_batch_scores_at_most_five_without_changing_final_score():
+    app = create_app("sqlite+pysqlite:///:memory:")
+    store = FakeCredentialStore()
+    app.state.ai_settings_service = AiSettingsService(store, FakeScoringBailianClient())
+    with app.state.session_factory() as session:
+        app.state.ai_settings_service.save_api_key(session, "sk-private-test-key-ABCD")
+        for index in range(6):
+            session.add(
+                Job(
+                    fingerprint=f"score-batch-{index}",
+                    employer_name="上海示例单位",
+                    job_title=f"应届生实习岗{index}",
+                    job_family="待分类",
+                    recruitment_type="实习",
+                    location_category="明确上海",
+                    location_detail="上海",
+                    target_audience="待人工判断",
+                    direction_tags="待人工分类",
+                    deadline="原文待人工确认",
+                    official_url="",
+                    source_url=f"https://careers.example.com/{index}",
+                    evidence_text="面向应届生的上海实习招聘，欢迎学生申请。",
+                    quality_score=0,
+                    risk_flags="真实线索：尚未人工核验，不得对外发布",
+                    is_demo=False,
+                    status="待核验",
+                    notice_type="新招聘",
+                    intake_grade="A",
+                )
+            )
+        session.commit()
+
+    response = TestClient(app).post("/jobs/scoring/suggest-batch", follow_redirects=False)
+
+    assert response.status_code == 303
+    with app.state.session_factory() as session:
+        scored = session.scalars(select(Job).where(Job.ai_suggested_score > 0)).all()
+        assert len(scored) == 5
+        assert all(job.quality_score == 0 for job in scored)
+        assert all(job.ai_score_status == "AI建议" for job in scored)
 
 
 def test_ai_settings_key_and_model_forms_redirect_and_keep_secret_out_of_html():
