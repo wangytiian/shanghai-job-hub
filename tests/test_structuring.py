@@ -1,3 +1,4 @@
+import json
 import pytest
 
 from app.models import Job, ReviewLog
@@ -52,9 +53,31 @@ def _valid_input(**overrides) -> StructuringInput:
         "distribution_recommendation": "进入学生分发审核",
         "ai_rationale": "原文明确面向应届生。",
         "ai_confidence": "高",
+        "verification_checks": {
+            "source_checked": True, "scope_checked": True, "audience_checked": True,
+            "location_checked": True, "application_checked": True, "timeliness_checked": True,
+        },
     }
     values.update(overrides)
     return StructuringInput(**values)
+
+
+def test_structure_job_requires_all_human_verification_checks(session):
+    job = _pending_verification_job(session)
+    checks = _valid_input().verification_checks
+    checks["timeliness_checked"] = False
+
+    with pytest.raises(ValueError, match="时效"):
+        structure_job(session, job.id, _valid_input(verification_checks=checks), "本地管理员")
+
+
+def test_structure_job_saves_human_verification_checks(session):
+    job = _pending_verification_job(session)
+
+    result = structure_job(session, job.id, _valid_input(), "本地管理员")
+
+    assert json.loads(result.verification_checks)["application_checked"] is True
+    assert session.query(ReviewLog).filter_by(job_id=job.id, action="人工核验清单已确认").count() == 1
 
 
 def test_structure_job_requires_official_link_and_audience(session):

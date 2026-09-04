@@ -10,6 +10,8 @@
 {% if classification_feedback %}<div class="notice notice-success" role="status"><strong>公告分类已处理。</strong>{{ classification_feedback }}</div>{% endif %}
 {% if scoring_feedback %}<div class="notice notice-success" role="status"><strong>建议分批处理完成。</strong>{{ scoring_feedback }} 建议分不等于最终质量分，仍需人工确认。</div>{% endif %}
 
+<section class="panel section-block"><span class="eyebrow">TODAY'S AI QUEUE</span><h2>今日 AI 建议队列</h2><p>待建议 {{ score_queue_counts['待建议'] }} 条｜AI 建议 {{ score_queue_counts['AI建议'] }} 条｜规则建议 {{ score_queue_counts['规则建议'] }} 条｜不适用 {{ score_queue_counts['不适用'] }} 条。初筛等级不等于审核结论，AI 建议分只用于排序。</p></section>
+
 {% if suggested_new_recruitment_count %}
 <section class="panel section-block batch-classification-panel">
   <span class="eyebrow">BATCH CONFIRMATION</span>
@@ -36,6 +38,7 @@
   <label>数据属性<select name="data_type"><option value="real" {% if selected_data_type == 'real' %}selected{% endif %}>真实线索</option><option value="demo" {% if selected_data_type == 'demo' %}selected{% endif %}>演示数据</option><option value="all" {% if selected_data_type == 'all' %}selected{% endif %}>全部</option></select></label>
   <label>入库初筛<select name="intake_grade"><option value="">全部分级</option><option value="A" {% if selected_intake_grade == 'A' %}selected{% endif %}>A｜优先待核验</option><option value="B" {% if selected_intake_grade == 'B' %}selected{% endif %}>B｜普通待核验</option><option value="C" {% if selected_intake_grade == 'C' %}selected{% endif %}>C｜人工复核</option><option value="D" {% if selected_intake_grade == 'D' %}selected{% endif %}>D｜过滤留档</option></select></label>
   <label>处理状态<select name="status"><option value="">全部状态</option>{% for value in ['待核验','待审核','可发布','已发布','已截止','淘汰'] %}<option value="{{ value }}" {% if selected_status == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+  <label>AI 建议状态<select name="score_status"><option value="">全部建议状态</option>{% for value in ['待建议','AI建议','规则建议','不适用'] %}<option value="{{ value }}" {% if selected_score_status == value %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
   <label class="filter-search">单位或岗位<input name="query" value="{{ query }}" placeholder="输入关键词"></label>
   <button class="button button-primary">筛选</button>
 </form>
@@ -51,7 +54,7 @@
 {% if jobs %}
 <div class="responsive-table desktop-only">
   <table>
-    <thead><tr><th>单位 / 岗位</th><th>数据属性</th><th>初筛</th><th>类型</th><th>适合人群</th><th>拉取时间</th><th>建议分</th><th>最终质量</th><th>状态</th></tr></thead>
+    <thead><tr><th>单位 / 岗位</th><th>数据属性</th><th>入库初筛</th><th>类型</th><th>适合人群</th><th>拉取时间</th><th>AI 建议分（非审核结论）</th><th>人工最终分</th><th>状态</th></tr></thead>
     <tbody>{% for job in jobs %}<tr>
       <td class="job-name"><a href="/jobs/{{ job.id }}">{{ job.employer_name }}<strong>{{ job.job_title }}</strong></a></td>
       <td><span class="data-badge {% if job.is_demo %}data-demo{% else %}data-real{% endif %}">{% if job.is_demo %}演示数据{% else %}真实线索{% endif %}</span></td>

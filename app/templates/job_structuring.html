@@ -24,6 +24,16 @@
     <form class="review-form" method="post" action="/jobs/{{ job.id }}/structure" data-structuring-form novalidate>
       <div class="notice notice-error client-validation-notice" data-client-validation-notice hidden role="alert">请补充标红的必填项或修正格式后再提交。</div>
       <div class="section-heading"><div><span class="eyebrow">FACTS</span><h2>原文事实</h2></div></div>
+      <fieldset{% if errors.get('verification_checks') %} class="field-error"{% endif %}><legend>人工核验清单（六项均须确认）</legend>
+        {% set checks = values.get('verification_checks', {}) %}
+        <label><input type="checkbox" name="source_checked" {% if checks.get('source_checked') %}checked{% endif %}> 已核对原始来源</label>
+        <label><input type="checkbox" name="scope_checked" {% if checks.get('scope_checked') %}checked{% endif %}> 已确认岗位或公告范围</label>
+        <label><input type="checkbox" name="audience_checked" {% if checks.get('audience_checked') %}checked{% endif %}> 已确认面向学生人群</label>
+        <label><input type="checkbox" name="location_checked" {% if checks.get('location_checked') %}checked{% endif %}> 已确认工作地点</label>
+        <label><input type="checkbox" name="application_checked" {% if checks.get('application_checked') %}checked{% endif %}> 已核对官方投递入口</label>
+        <label><input type="checkbox" name="timeliness_checked" {% if checks.get('timeliness_checked') %}checked{% endif %}> 已确认公告仍有效（原文未写统一截止日期也可确认）</label>
+        {{ error_note('verification_checks') }}
+      </fieldset>
       <div class="form-grid">
         <label{% if errors.get('employer_name') %} class="field-error"{% endif %}>招聘单位标准名称<input required name="employer_name"{{ invalid_attr('employer_name') }} value="{{ values.get('employer_name', ai_draft.employer_name if ai_draft else job.employer_name) }}">{{ error_note('employer_name') }}</label>
         <label{% if errors.get('posting_scope') %} class="field-error"{% endif %}>公告范围<select name="posting_scope"{{ invalid_attr('posting_scope') }}><option value="single_role" {% if values.get('posting_scope', ai_draft.posting_scope if ai_draft else job.posting_scope) == 'single_role' %}selected{% endif %}>单一明确岗位</option><option value="multi_role_announcement" {% if values.get('posting_scope', ai_draft.posting_scope if ai_draft else '') == 'multi_role_announcement' %}selected{% endif %}>多岗位招聘公告</option><option value="attachment_pending" {% if values.get('posting_scope', ai_draft.posting_scope if ai_draft else '') == 'attachment_pending' %}selected{% endif %}>岗位明细在附件</option><option value="insufficient_information" {% if values.get('posting_scope', ai_draft.posting_scope if ai_draft else '') == 'insufficient_information' %}selected{% endif %}>原文信息不足</option><option value="non_job_notice" {% if values.get('posting_scope', ai_draft.posting_scope if ai_draft else '') == 'non_job_notice' %}selected{% endif %}>非具体岗位通知</option></select>{{ error_note('posting_scope') }}</label>

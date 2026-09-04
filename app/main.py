@@ -8,7 +8,7 @@ from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.database import create_database
@@ -427,6 +427,7 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
         status: str = "",
         data_type: str = "real",
         intake_grade: str = "",
+        score_status: str = "",
         query: str = "",
         classification_feedback: str = "",
         scoring_feedback: str = "",
@@ -434,7 +435,7 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
         with get_session() as session:
             if data_type not in {"real", "demo", "all"}:
                 raise HTTPException(400, "数据属性筛选无效")
-            statement = select(Job).order_by(Job.updated_at.desc(), Job.id.desc())
+            statement = select(Job)
             if data_type == "real":
                 statement = statement.where(Job.is_demo.is_(False))
             elif data_type == "demo":
@@ -449,6 +450,10 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
                 statement = statement.where(Job.intake_grade == intake_grade)
             elif data_type == "real":
                 statement = statement.where(Job.intake_grade != "D")
+            if score_status:
+                if score_status not in {"待建议", "AI建议", "规则建议", "不适用"}:
+                    raise HTTPException(400, "建议状态筛选无效")
+                statement = statement.where(Job.ai_score_status == score_status)
             normalized_query = query.strip()
             if normalized_query:
                 statement = statement.where(
@@ -457,6 +462,13 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
                         Job.job_title.contains(normalized_query),
                     )
                 )
+            statement = statement.order_by(
+                Job.status != "待核验",
+                case((Job.intake_grade == "A", 0), (Job.intake_grade == "B", 1), (Job.intake_grade == "C", 2), else_=3),
+                Job.ai_suggested_score.desc(),
+                Job.collected_at.desc(),
+                Job.id.desc(),
+            )
             job_records = session.scalars(statement).all()
             suggested_new_recruitment_count = (
                 len(suggested_new_recruitment_jobs(session))
@@ -475,6 +487,12 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
                     Job.ai_score_status == "待建议",
                 )
             ) or 0
+            score_queue_counts = {
+                value: session.scalar(select(func.count()).select_from(Job).where(
+                    Job.is_demo.is_(False), Job.status == "待核验", Job.ai_score_status == value
+                )) or 0
+                for value in ("待建议", "AI建议", "规则建议", "不适用")
+            }
             return templates.TemplateResponse(
                 request,
                 "jobs.html",
@@ -486,6 +504,8 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
                     selected_intake_grade=intake_grade,
                     selected_data_type=data_type,
                     query=normalized_query,
+                    selected_score_status=score_status,
+                    score_queue_counts=score_queue_counts,
                     suggested_new_recruitment_count=suggested_new_recruitment_count,
                     suggested_score_candidate_count=suggested_score_candidate_count,
                     classification_feedback=classification_feedback,
@@ -626,6 +646,12 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
         distribution_recommendation: str = Form("仅保留资料库"),
         ai_rationale: str = Form(""),
         ai_confidence: str = Form("低"),
+        source_checked: str | None = Form(None),
+        scope_checked: str | None = Form(None),
+        audience_checked: str | None = Form(None),
+        location_checked: str | None = Form(None),
+        application_checked: str | None = Form(None),
+        timeliness_checked: str | None = Form(None),
     ):
         structuring_input = StructuringInput(
             employer_name=employer_name,
@@ -648,6 +674,11 @@ def create_app(database_url: str = DEFAULT_DATABASE_URL) -> FastAPI:
             distribution_recommendation=distribution_recommendation,
             ai_rationale=ai_rationale,
             ai_confidence=ai_confidence,
+            verification_checks={
+                "source_checked": source_checked == "on", "scope_checked": scope_checked == "on",
+                "audience_checked": audience_checked == "on", "location_checked": location_checked == "on",
+                "application_checked": application_checked == "on", "timeliness_checked": timeliness_checked == "on",
+            },
         )
         with get_session() as session:
             try:

@@ -114,8 +114,9 @@ def test_jobs_page_separates_ai_suggested_score_from_human_final_score():
     response = client.get("/jobs?data_type=all")
 
     assert response.status_code == 200
-    assert "建议分" in response.text
-    assert "最终质量" in response.text
+    assert "AI 建议分（非审核结论）" in response.text
+    assert "人工最终分" in response.text
+    assert 'name="score_status"' in response.text
 
 
 def test_suggested_score_batch_scores_at_most_five_without_changing_final_score():
@@ -702,6 +703,8 @@ def test_pending_verification_job_opens_structuring_form_and_submits():
             "deadline": "2026-09-30",
             "official_url": "https://example.com/apply",
             "note": "核对公开原文后填写。",
+            "source_checked": "on", "scope_checked": "on", "audience_checked": "on",
+            "location_checked": "on", "application_checked": "on", "timeliness_checked": "on",
         },
         follow_redirects=False,
     )
@@ -953,6 +956,8 @@ def test_structuring_submission_keeps_form_and_marks_attachment_error_inline():
             "distribution_recommendation": "进入学生分发审核",
             "ai_rationale": "与会计专业学生相关。",
             "ai_confidence": "中",
+            "source_checked": "on", "scope_checked": "on", "audience_checked": "on",
+            "location_checked": "on", "application_checked": "on", "timeliness_checked": "on",
         },
     )
 
@@ -987,6 +992,8 @@ def test_structuring_submission_allows_omitted_deadline_and_records_unspecified_
             "distribution_recommendation": "进入学生分发审核",
             "ai_rationale": "与会计专业学生相关。",
             "ai_confidence": "中",
+            "source_checked": "on", "scope_checked": "on", "audience_checked": "on",
+            "location_checked": "on", "application_checked": "on", "timeliness_checked": "on",
         },
         follow_redirects=False,
     )

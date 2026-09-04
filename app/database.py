@@ -67,6 +67,7 @@ def _upgrade_sqlite_columns(engine) -> None:
             "ai_score_breakdown": "TEXT NOT NULL DEFAULT '{}'",
             "ai_score_confidence": "VARCHAR(10) NOT NULL DEFAULT '低'",
             "ai_scored_at": "DATETIME",
+            "verification_checks": "TEXT NOT NULL DEFAULT '{}'",
         },
         "sources": {
             "adapter_key": "VARCHAR(60) NOT NULL DEFAULT ''",

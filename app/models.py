@@ -75,6 +75,7 @@ class Job(Base):
     distribution_recommendation: Mapped[str] = mapped_column(String(30), default="仅保留资料库", nullable=False)
     ai_rationale: Mapped[str] = mapped_column(Text, default="", nullable=False)
     ai_confidence: Mapped[str] = mapped_column(String(10), default="低", nullable=False)
+    verification_checks: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
     intake_grade: Mapped[str] = mapped_column(String(1), default="C", nullable=False)
     intake_route: Mapped[str] = mapped_column(String(30), default="人工复核", nullable=False)
     intake_reason: Mapped[str] = mapped_column(Text, default="", nullable=False)

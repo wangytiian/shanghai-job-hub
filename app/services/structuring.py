@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import json
 from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
@@ -29,6 +30,7 @@ class StructuringInput:
     distribution_recommendation: str = "仅保留资料库"
     ai_rationale: str = ""
     ai_confidence: str = "低"
+    verification_checks: dict[str, bool] | None = None
 
 
 class StructuringValidationError(ValueError):
@@ -78,6 +80,18 @@ def _validate_input(data: StructuringInput) -> None:
         errors["distribution_recommendation"] = "分发建议选择无效"
     if data.ai_confidence not in {"高", "中", "低"}:
         errors["ai_confidence"] = "AI 判断置信度无效"
+    checks = data.verification_checks or {}
+    required_checks = {
+        "source_checked": "原始来源",
+        "scope_checked": "岗位或公告范围",
+        "audience_checked": "面向学生人群",
+        "location_checked": "工作地点",
+        "application_checked": "官方投递入口",
+        "timeliness_checked": "时效",
+    }
+    missing_checks = [label for key, label in required_checks.items() if not checks.get(key)]
+    if missing_checks:
+        errors["verification_checks"] = f"请确认：{'、'.join(missing_checks)}"
     if errors:
         raise StructuringValidationError(errors)
 
@@ -120,9 +134,18 @@ def structure_job(
         setattr(job, field_name, getattr(data, field_name).strip())
     job.deadline = normalized_deadline
     job.quality_score = data.quality_score
+    job.verification_checks = json.dumps(data.verification_checks or {}, ensure_ascii=False, sort_keys=True)
     job.risk_flags = "待最终人工审核：结构化字段已由运营人员补齐"
     job.status = "待审核"
     job.last_change_summary = "人工完成公告结构化，等待最终审核"
+    session.add(
+        ReviewLog(
+            job_id=job.id,
+            action="人工核验清单已确认",
+            note=job.verification_checks,
+            operator_name=operator_name,
+        )
+    )
     session.add(
         ReviewLog(
             job_id=job.id,
