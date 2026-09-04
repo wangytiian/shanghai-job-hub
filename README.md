@@ -69,6 +69,8 @@ cd shanghai-job-hub
 powershell -ExecutionPolicy Bypass -File .\run_local.ps1
 ```
 
+首次运行请先安装 **Python 3.10 或更高版本**，并在安装时勾选 **Add Python to PATH**。启动脚本会自动找到当前电脑的 Python、创建 `.venv`、安装依赖；不依赖任何人的用户名或 Python 安装路径。
+
 启动后，在“AI 模型配置”页填写自己的百炼 API Key。密钥通过 Windows 凭据管理器保存在各自电脑中，不进入代码仓库。
 
 真实官方来源采集已启动；字段抽取与审核规则将从下一阶段逐项接入。
