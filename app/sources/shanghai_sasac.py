@@ -53,6 +53,10 @@ def parse_listing_html(html: str, base_url: str = LISTING_URL) -> list[ShanghaiS
 
 def parse_detail_html(html: str, listing: ShanghaiSasacListing) -> ShanghaiSasacDetail:
     soup = BeautifulSoup(html, "html.parser")
+    page_text = soup.get_text(" ", strip=True)
+    blocked_markers = ("403 Forbidden", "访问受限", "访问频繁", "安全验证", "验证码")
+    if any(marker in page_text for marker in blocked_markers):
+        raise ValueError("来源页面访问受限，未取得招聘正文")
     heading = soup.find("h1")
     title = heading.get_text(" ", strip=True) if heading else listing.title
     page_text = soup.get_text("\n", strip=True)
