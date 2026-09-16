@@ -1,6 +1,28 @@
+from dataclasses import dataclass
 from datetime import datetime
+from typing import Iterable
 
 from app.models import Source
+
+
+@dataclass(frozen=True)
+class SourceLibrarySummary:
+    catalog_sources: int
+    demo_sources: int
+    schedulable_sources: int
+
+
+def summarize_source_library(sources: Iterable[Source], catalog) -> SourceLibrarySummary:
+    """Report catalog, demo, and currently runnable source counts separately."""
+    source_list = list(sources)
+    catalog_names = {definition.name for definition in catalog}
+    return SourceLibrarySummary(
+        catalog_sources=sum(source.name in catalog_names for source in source_list),
+        demo_sources=sum(source.name.endswith("（演示）") for source in source_list),
+        schedulable_sources=sum(
+            source.is_enabled and source.status != "暂停" for source in source_list
+        ),
+    )
 
 
 def can_auto_collect(source: Source) -> bool:

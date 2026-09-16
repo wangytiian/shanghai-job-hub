@@ -1,0 +1,27 @@
+name: recruitingops_test
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: recruiting_test
+      POSTGRES_USER: recruiting_test
+      POSTGRES_PASSWORD: recruiting_test_only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U recruiting_test -d recruiting_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  tests:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    environment:
+      APP_ENV: test
+      SECRET_BACKEND: file
+      DATABASE_URL: postgresql+psycopg://recruiting_test:recruiting_test_only@db:5432/recruiting_test
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["pytest", "-q"]

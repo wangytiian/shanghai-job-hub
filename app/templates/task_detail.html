@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}任务详情 · 招聘内容运营工作台{% endblock %}
+{% block content %}
+<section class="page-heading"><span class="eyebrow">BACKGROUND TASK</span><h1>{{ task.task_name }} #{{ task.id }}</h1><p>{{ task.message }}</p></section>
+<section class="panel"><div class="stats-grid"><div><span>批次状态</span><strong>{{ task.status }}</strong></div><div><span>排队中</span><strong>{{ status_counts.queued }}</strong></div><div><span>处理中</span><strong>{{ status_counts.running }}</strong></div><div><span>已完成</span><strong>{{ status_counts.succeeded }}</strong></div><div><span>需人工处理</span><strong>{{ status_counts.needs_review }}</strong></div></div></section>
+<section class="panel"><h2>子任务</h2><table><thead><tr><th>ID</th><th>类型</th><th>目标</th><th>状态</th><th>尝试次数</th><th>说明</th></tr></thead><tbody>{% for item in items %}<tr><td>#{{ item.id }}</td><td>{{ item.kind }}</td><td>{{ item.target_type }} #{{ item.target_id }}</td><td>{% if item.status == 'queued' %}排队中{% elif item.status == 'running' %}处理中{% elif item.status == 'succeeded' %}已完成{% else %}需人工处理{% endif %}</td><td>{{ item.attempts }}</td><td>{{ item.error_code or '—' }}</td></tr>{% else %}<tr><td colspan="6">该任务尚未生成后台子任务。</td></tr>{% endfor %}</tbody></table></section>
+{% endblock %}

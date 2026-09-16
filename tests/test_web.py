@@ -1,12 +1,16 @@
 from pathlib import Path
+import sys
 import subprocess
 from datetime import datetime
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.main import DEFAULT_DATABASE_PATH, create_app
-from app.models import Job, ReviewLog
+from app.auth.service import create_user
+from app.config import Settings
+from app.models import Job, ReviewLog, Source, SourceTrialRun, SourceTrialSample, TaskRun, WorkItem
 from app.services.ai_settings import AiSettingsService
 from app.services.real_collection import RealCollectionResult
 
@@ -159,6 +163,46 @@ def test_suggested_score_batch_scores_at_most_five_without_changing_final_score(
         assert len(scored) == 5
         assert all(job.quality_score == 0 for job in scored)
         assert all(job.ai_score_status == "AI建议" for job in scored)
+
+
+def test_suggested_score_batch_records_a_persistent_run_and_marks_expired_items_not_applicable():
+    app = create_app("sqlite+pysqlite:///:memory:")
+    with app.state.session_factory() as session:
+        session.add(
+            Job(
+                fingerprint="expired-score-batch",
+                employer_name="上海示例单位",
+                job_title="过期实习岗",
+                job_family="待分类",
+                recruitment_type="实习",
+                location_category="明确上海",
+                location_detail="上海",
+                target_audience="待人工判断",
+                direction_tags="待人工分类",
+                deadline="2026-01-01",
+                official_url="",
+                source_url="https://careers.example.com/expired",
+                evidence_text="面向应届生的上海实习招聘。",
+                quality_score=0,
+                risk_flags="真实线索：尚未人工核验，不得对外发布",
+                is_demo=False,
+                status="待核验",
+                notice_type="新招聘",
+                intake_grade="A",
+            )
+        )
+        session.commit()
+
+    response = TestClient(app).post("/jobs/scoring/suggest-batch", follow_redirects=False)
+
+    assert response.status_code == 303
+    with app.state.session_factory() as session:
+        expired = session.query(Job).filter_by(fingerprint="expired-score-batch").one()
+        run = session.query(TaskRun).filter_by(task_name="AI建议分批次").one()
+        assert expired.ai_score_status == "不适用"
+        assert "报名已截止" in expired.ai_score_reason
+        assert run.status == "完成"
+        assert "不适用 1 条" in run.message
 
 
 def test_ai_settings_key_and_model_forms_redirect_and_keep_secret_out_of_html():
@@ -406,6 +450,62 @@ def test_real_jobs_page_shows_collection_time_for_each_real_clue():
     assert "2026-09-01 16:30" in response.text
 
 
+def test_jobs_can_filter_real_clues_by_inclusive_collection_date_range():
+    app = create_app("sqlite+pysqlite:///:memory:")
+    with app.state.session_factory() as session:
+        for employer_name, collected_at in (
+            ("日期范围起点单位", datetime(2026, 9, 1, 0, 0)),
+            ("日期范围中间单位", datetime(2026, 9, 2, 12, 0)),
+            ("日期范围终点单位", datetime(2026, 9, 3, 23, 59)),
+            ("日期范围外单位", datetime(2026, 9, 4, 0, 0)),
+        ):
+            session.add(
+                Job(
+                    fingerprint=f"日期筛选|{employer_name}",
+                    employer_name=employer_name,
+                    job_title="招聘实习生",
+                    job_family="综合职能",
+                    recruitment_type="校园招聘",
+                    location_category="明确上海",
+                    location_detail="上海",
+                    target_audience="应届生",
+                    direction_tags="综合运营",
+                    deadline="招满即止",
+                    official_url="https://example.com/apply",
+                    source_url="https://example.com/source",
+                    evidence_text="公开招聘原文证据。",
+                    quality_score=0,
+                    risk_flags="待人工核验",
+                    is_demo=False,
+                    collected_at=collected_at,
+                    status="待核验",
+                    intake_grade="A",
+                    intake_route="优先待核验",
+                )
+            )
+        session.commit()
+
+    response = TestClient(app).get(
+        "/jobs?data_type=real&collected_from=2026-09-01&collected_to=2026-09-03"
+    )
+
+    assert response.status_code == 200
+    assert "日期范围起点单位" in response.text
+    assert "日期范围中间单位" in response.text
+    assert "日期范围终点单位" in response.text
+    assert "日期范围外单位" not in response.text
+    assert 'name="collected_from"' in response.text
+    assert 'name="collected_to"' in response.text
+
+
+def test_jobs_rejects_invalid_collection_date_filter():
+    response = TestClient(create_app("sqlite+pysqlite:///:memory:")).get(
+        "/jobs?collected_from=2026-99-01"
+    )
+
+    assert response.status_code == 400
+
+
 def test_jobs_reject_invalid_data_type():
     client = TestClient(create_app("sqlite+pysqlite:///:memory:"))
 
@@ -465,6 +565,206 @@ def test_sources_page_explains_real_and_demo_source_boundaries():
     assert "每日采集" in response.text
 
 
+def test_sources_page_shows_trial_metrics_blockers_and_report_link():
+    app = create_app("sqlite+pysqlite:///:memory:")
+    with app.state.session_factory() as session:
+        source = session.scalar(select(Source).where(Source.source_key == "sjtu-internships"))
+        source.validation_state = "试采中"
+        run = SourceTrialRun(
+            run_id="page-run",
+            source_id=source.id,
+            adapter_version=source.adapter_version,
+            rule_version="source-candidate-v1",
+            started_at=datetime(2026, 9, 11, 9, 0),
+            finished_at=datetime(2026, 9, 11, 9, 5),
+            state="completed",
+            detail_attempt_count=3,
+            detail_success_count=3,
+            candidate_count=1,
+            exclusion_summary='{"LOCATION_NOT_SHANGHAI":2}',
+            requested_by="tester",
+            idempotency_key="page-task",
+        )
+        session.add(run)
+        session.commit()
+        source_id = source.id
+
+    response = TestClient(app).get("/sources")
+
+    assert response.status_code == 200
+    assert "试采中" in response.text
+    assert "详情成功 3 / 3" in response.text
+    assert "三轮累计需至少" in response.text
+    assert f'/sources/{source_id}/trials' in response.text
+    assert "发起试采" in response.text
+
+
+def test_source_trial_report_shows_sample_evidence_and_exclusion_reason():
+    app = create_app("sqlite+pysqlite:///:memory:")
+    with app.state.session_factory() as session:
+        source = session.scalar(select(Source).where(Source.source_key == "sjtu-internships"))
+        run = SourceTrialRun(
+            run_id="report-run",
+            source_id=source.id,
+            adapter_version=source.adapter_version,
+            rule_version="source-candidate-v1",
+            started_at=datetime(2026, 9, 11, 9, 0),
+            finished_at=datetime(2026, 9, 11, 9, 5),
+            state="completed",
+            detail_attempt_count=1,
+            detail_success_count=1,
+            candidate_count=0,
+            exclusion_summary='{"LOCATION_NOT_SHANGHAI":1}',
+            requested_by="tester",
+            idempotency_key="report-task",
+        )
+        session.add(run)
+        session.flush()
+        session.add(
+            SourceTrialSample(
+                run_id=run.run_id,
+                identity_key="notice-1:job-1",
+                announcement_id="notice-1",
+                job_id="job-1",
+                employer_name="示例公司",
+                title="运营实习生",
+                location_category="明确非上海",
+                location_detail="北京",
+                evidence_text="工作地点：北京；面向在校生",
+                source_url="https://example.test/job-1",
+                decision="excluded",
+                reason_codes='["LOCATION_NOT_SHANGHAI"]',
+                content_hash="hash",
+            )
+        )
+        session.commit()
+        source_id = source.id
+
+    response = TestClient(app).get(f"/sources/{source_id}/trials")
+
+    assert response.status_code == 200
+    assert "运营实习生" in response.text
+    assert "工作地点：北京" in response.text
+    assert "LOCATION_NOT_SHANGHAI" in response.text
+
+
+def test_source_trial_report_links_only_http_or_https_urls():
+    app = create_app("sqlite+pysqlite:///:memory:")
+    with app.state.session_factory() as session:
+        source = session.scalar(select(Source).where(Source.source_key == "sjtu-internships"))
+        run = SourceTrialRun(
+            run_id="safe-link-run",
+            source_id=source.id,
+            adapter_version=source.adapter_version,
+            rule_version="source-candidate-v1",
+            started_at=datetime(2026, 9, 11, 9, 0),
+            finished_at=datetime(2026, 9, 11, 9, 5),
+            state="completed",
+            detail_attempt_count=2,
+            detail_success_count=2,
+            candidate_count=0,
+            requested_by="tester",
+            idempotency_key="safe-link-task",
+        )
+        session.add(run)
+        session.flush()
+        session.add_all(
+            [
+                SourceTrialSample(
+                    run_id=run.run_id,
+                    identity_key="unsafe",
+                    announcement_id="unsafe",
+                    title="不安全链接样本",
+                    evidence_text="测试",
+                    source_url="javascript:alert(1)",
+                    application_kind="url",
+                    application_value="data:text/html,unsafe",
+                    decision="excluded",
+                    reason_codes="[]",
+                    content_hash="unsafe-hash",
+                ),
+                SourceTrialSample(
+                    run_id=run.run_id,
+                    identity_key="safe",
+                    announcement_id="safe",
+                    title="安全链接样本",
+                    evidence_text="测试",
+                    source_url="https://example.test/source",
+                    application_kind="url",
+                    application_value="http://jobs.example.test/apply",
+                    decision="excluded",
+                    reason_codes="[]",
+                    content_hash="safe-hash",
+                ),
+            ]
+        )
+        session.commit()
+        source_id = source.id
+
+    response = TestClient(app).get(f"/sources/{source_id}/trials")
+
+    assert response.status_code == 200
+    assert 'href="javascript:' not in response.text
+    assert 'href="data:' not in response.text
+    assert 'href="https://example.test/source"' in response.text
+    assert 'href="http://jobs.example.test/apply"' in response.text
+
+
+def test_start_source_trial_queues_work_without_enabling_or_collecting_jobs():
+    app = create_app("sqlite+pysqlite:///:memory:")
+    with app.state.session_factory() as session:
+        source = session.scalar(select(Source).where(Source.source_key == "sjtu-internships"))
+        source_id = source.id
+        jobs_before = session.query(Job).count()
+
+    response = TestClient(app).post(f"/sources/{source_id}/trials", follow_redirects=False)
+
+    assert response.status_code == 303
+    with app.state.session_factory() as session:
+        source = session.get(Source, source_id)
+        assert session.query(WorkItem).filter_by(kind="source_trial", target_id=source_id).count() == 1
+        assert session.query(Job).count() == jobs_before
+        assert source.library_tier == "B"
+        assert source.is_enabled is False
+
+
+def test_cloud_member_cannot_approve_source_admission():
+    app = create_app(
+        "sqlite+pysqlite:///:memory:",
+        settings=Settings(app_env="cloud", database_url="postgresql://example.invalid/test"),
+    )
+    with app.state.session_factory() as session:
+        create_user(
+            session,
+            "member",
+            "A secure password",
+            "普通成员",
+            must_change_password=False,
+        )
+        source = session.scalar(select(Source).where(Source.source_key == "sjtu-internships"))
+        source_id = source.id
+        expected_version = source.adapter_version
+    client = TestClient(app, base_url="https://testserver")
+    client.get("/login")
+    client.post(
+        "/login",
+        data={
+            "username": "member",
+            "password": "A secure password",
+            "csrf_token": client.cookies.get("recruiting_login_csrf"),
+        },
+        follow_redirects=False,
+    )
+
+    response = client.post(
+        f"/sources/{source_id}/admission",
+        data={"expected_version": expected_version},
+        headers={"X-CSRF-Token": client.cookies.get("recruiting_csrf")},
+    )
+
+    assert response.status_code == 403
+
+
 def test_wechat_lead_import_page_is_available():
     client = TestClient(create_app("sqlite+pysqlite:///:memory:"))
 
@@ -509,6 +809,22 @@ def test_public_queue_item_opens_a_copy_ready_wechat_draft_page():
     assert "复制标题" in draft_page.text
     assert "复制群消息" in draft_page.text
     assert "招聘岗位" in draft_page.text
+
+
+def test_wechat_draft_rejects_a_stale_item_after_job_facts_change():
+    app = create_app("sqlite+pysqlite:///:memory:")
+    client = TestClient(app)
+    client.post("/jobs/1/review", data={"action": "approve", "note": "演示审核通过"})
+    client.post("/jobs/1/distribution")
+    with app.state.session_factory() as session:
+        job = session.get(Job, 1)
+        job.version += 1
+        session.commit()
+
+    response = client.get("/distribution/1/wechat")
+
+    assert response.status_code == 409
+    assert "岗位事实已更新" in response.text
 
 
 def test_wechat_draft_page_offers_ai_content_refinement_before_copying():
@@ -581,12 +897,13 @@ def test_local_start_script_and_readme_exist():
 def test_readme_documents_v21_source_library_and_manual_review_boundary():
     readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
 
-    assert "71 家分层来源库" in readme
+    assert "80 家分层来源库" in readme
     assert "只有 A 类" in readme
     assert "人工审核" in readme
     assert "上海华智公考" in readme
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="PowerShell syntax validation runs on Windows hosts")
 def test_local_start_script_has_valid_powershell_syntax():
     project_root = Path(__file__).resolve().parents[1]
     script = project_root / "run_local.ps1"
@@ -607,6 +924,7 @@ def test_local_start_script_has_valid_powershell_syntax():
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="PowerShell syntax validation runs on Windows hosts")
 def test_daily_collection_scripts_exist_and_schedule_script_has_valid_powershell_syntax():
     project_root = Path(__file__).resolve().parents[1]
     assert (project_root / "scripts" / "run_due_collection.py").is_file()
@@ -702,6 +1020,11 @@ def test_pending_verification_job_opens_structuring_form_and_submits():
             "direction_tags": "会计审计、金融银行",
             "deadline": "2026-09-30",
             "official_url": "https://example.com/apply",
+            "quality_score": "80",
+            "student_fit_level": "核心适配",
+            "distribution_recommendation": "进入学生分发审核",
+            "ai_rationale": "已核对公开原文中的实习和专业方向。",
+            "ai_confidence": "中",
             "note": "核对公开原文后填写。",
             "source_checked": "on", "scope_checked": "on", "audience_checked": "on",
             "location_checked": "on", "application_checked": "on", "timeliness_checked": "on",
@@ -966,6 +1289,21 @@ def test_structuring_submission_keeps_form_and_marks_attachment_error_inline():
     assert "附件尚未核验，补齐岗位明细后才能进入待审核" in response.text
     assert 'name="posting_scope" aria-invalid="true"' in response.text
     assert 'value="财务实习生"' in response.text
+
+
+def test_structuring_submission_returns_inline_errors_when_required_fields_are_omitted():
+    app = create_app_with_fake_ai_settings()
+    job_id = _create_ai_ready_job(app)
+
+    response = TestClient(app).post(
+        f"/jobs/{job_id}/structure",
+        data={"employer_name": "上海测试单位"},
+    )
+
+    assert response.status_code == 200
+    assert "本次未能提交" in response.text
+    assert "岗位名称不能为空" in response.text
+    assert 'name="job_title" aria-invalid="true"' in response.text
 
 
 def test_structuring_submission_allows_omitted_deadline_and_records_unspecified_value():

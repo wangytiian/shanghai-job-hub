@@ -1,0 +1,18 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+COPY app ./app
+COPY alembic.ini ./
+COPY migrations ./migrations
+COPY tests ./tests
+# Repository-level launch and deployment artifacts are tested as well.  Copy
+# only those artifacts instead of local data, secrets, or virtual environments.
+COPY Dockerfile.test compose.test.yaml README.md run_local.ps1 install_daily_schedule.ps1 ./
+COPY scripts ./scripts
+
+CMD ["pytest", "-q"]

@@ -55,6 +55,23 @@ def test_student_ineligible_job_cannot_create_distribution_items(session, pendin
         create_distribution_items(session, pending_review_job.id)
 
 
+def test_distribution_rechecks_publish_gate_and_records_fact_version(session, pending_review_job):
+    pending_review_job.status = "可发布"
+    pending_review_job.verification_checks = "{}"
+    session.commit()
+
+    with pytest.raises(ValueError, match="人工核验清单"):
+        create_distribution_items(session, pending_review_job.id)
+
+    pending_review_job.verification_checks = '{"source_checked":true,"scope_checked":true,"audience_checked":true,"location_checked":true,"application_checked":true,"timeliness_checked":true}'
+    pending_review_job.verification_version = pending_review_job.version
+    session.commit()
+    items = create_distribution_items(session, pending_review_job.id)
+
+    assert all(item.job_version == pending_review_job.version for item in items)
+    assert all(item.template_version == "finjob-v1" for item in items)
+
+
 @pytest.mark.parametrize("grade", ["C", "D"])
 def test_only_ab_intake_grades_can_enter_student_distribution(session, pending_review_job, grade):
     pending_review_job.status = "可发布"

@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}操作暂不可执行 · 招聘内容运营工作台{% endblock %}
+{% block content %}
+<section class="page-heading"><span class="eyebrow">ACTION REQUIRED</span><h1>{{ title }}</h1><p>当前操作被保护规则暂时拦截，原有数据未被删除。</p></section>
+<section class="panel section-block"><div class="notice notice-error" role="alert"><strong>暂不能继续。</strong>{{ message }}</div><a class="button button-primary" href="{{ back_url }}">返回处理</a></section>
+{% endblock %}

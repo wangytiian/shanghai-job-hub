@@ -5,6 +5,7 @@ from typing import Callable
 from urllib.parse import urlparse
 
 from app.models import Job
+from app.services.deadline_policy import job_application_deadline
 
 
 @dataclass(frozen=True)
@@ -54,18 +55,18 @@ def _completeness_points(job: Job) -> int:
 
 
 def _location_points(job: Job) -> int:
-    text = f"{job.location_category} {job.location_detail} {job.evidence_text}"
-    if "上海" in text:
+    if job.location_category in {"明确上海", "可选上海"} and not _is_placeholder(job.location_detail):
         return 10
-    if "全国" in text:
+    if job.location_category == "全国" and not _is_placeholder(job.location_detail):
         return 5
     return 0
 
 
 def _freshness_points(job: Job, today: date) -> int:
-    if not job.collected_at:
+    reference_time = job.published_at or job.collected_at
+    if not reference_time:
         return 2
-    age_days = max(0, (today - job.collected_at.date()).days)
+    age_days = max(0, (today - reference_time.date()).days)
     if age_days == 0:
         return 10
     if age_days <= 3:
@@ -130,6 +131,8 @@ def suggest_job_score(
 ) -> SuggestedScore:
     if not _is_eligible(job):
         return SuggestedScore(False, 0, "不适用", "该记录不满足建议分批处理条件。", {}, "低")
+    if (deadline := job_application_deadline(job)) is not None and deadline < (today or date.today()):
+        return SuggestedScore(False, 0, "不适用", "报名已截止，不进入建议分队列。", {}, "低")
 
     breakdown = _baseline(job, today or date.today())
     baseline_score = sum(breakdown.values())

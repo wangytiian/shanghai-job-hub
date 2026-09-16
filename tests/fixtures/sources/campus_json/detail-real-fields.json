@@ -1,0 +1,27 @@
+{
+  "code": 200,
+  "data": {
+    "zpxxid": "sjtu-300",
+    "zpzt": "全国校园招聘公告",
+    "fbrq": "2026-09-07",
+    "zpxxEditor": "<p>公司总部设在上海，欢迎同学关注。</p>",
+    "szxmc": "静安区",
+    "dwmc": "示例金融科技有限公司",
+    "jltdyx": "announcement@example.edu.cn",
+    "zwxxList": [
+      {
+        "zwid": "role-shanghai",
+        "zwmc": "投研实习生",
+        "zwms": "参与行业研究和报告撰写。",
+        "gzdz": "上海市静安区",
+        "zpyx": "role@example.edu.cn"
+      },
+      {
+        "zwid": "role-unknown",
+        "zwmc": "运营实习生",
+        "zwms": "参与校园招聘运营。",
+        "zpyx": "operations@example.edu.cn"
+      }
+    ]
+  }
+}

@@ -22,6 +22,8 @@
         <a href="/queues" {% if active_nav == 'queues' %}aria-current="page"{% endif %}>内容队列</a>
         <a href="/sources" {% if active_nav == 'sources' %}aria-current="page"{% endif %}>来源监控</a>
         <a href="/settings/ai" {% if active_nav == 'ai_settings' %}aria-current="page"{% endif %}>AI 模型配置</a>
+        {% if cloud_runtime %}<a href="/account/password">修改密码</a>{% endif %}
+        {% if cloud_runtime and request.state.current_user.role == 'admin' %}<a href="/users" {% if active_nav == 'users' %}aria-current="page"{% endif %}>成员账号</a>{% endif %}
       </nav>
       <div class="identity-note">
         面向上海立信会计金融学院学生，不代表校方授权或背书。
@@ -30,11 +32,12 @@
 
     <div class="app-workspace">
       <header class="app-topbar">
-        <div class="topbar-item"><span>运行环境</span><strong>本地环境</strong></div>
+        <div class="topbar-item"><span>运行环境</span><strong>{% if cloud_runtime %}团队云端{% else %}本地环境{% endif %}</strong></div>
         <div class="topbar-item"><span>待处理</span><strong>{{ global_status.pending_work_count }}</strong></div>
         <div class="topbar-item"><span>异常来源</span><strong>{{ global_status.unhealthy_source_count }}</strong></div>
         <div class="topbar-item topbar-time"><span>最后任务</span><strong>{{ global_status.last_task_at or '暂无记录' }}</strong></div>
-        <div class="topbar-user"><span>当前身份</span><strong>{{ global_status.operator_name }}</strong></div>
+        <div class="topbar-user"><span>当前身份</span><strong>{% if cloud_runtime %}{{ request.state.current_user.display_name }}{% else %}{{ global_status.operator_name }}{% endif %}</strong></div>
+        {% if cloud_runtime %}<form method="post" action="/logout"><button class="button button-secondary" type="submit">退出登录</button></form>{% endif %}
       </header>
 
       <main class="app-main">
@@ -42,9 +45,21 @@
       </main>
 
       <footer class="app-footer">
-        仅本机运行 · 真实线索必须人工核验 · 所有申请请以官方原文为准
+        {% if cloud_runtime %}团队协作环境{% else %}仅本机运行{% endif %} · 真实线索必须人工核验 · 所有申请请以官方原文为准
       </footer>
     </div>
   </div>
+  <script>
+    (() => {
+      const token = document.cookie.split('; ').find((row) => row.startsWith('recruiting_csrf='))?.split('=')[1];
+      if (!token) return;
+      document.querySelectorAll('form[method="post" i]').forEach((form) => {
+        if (form.querySelector('input[name="csrf_token"]')) return;
+        const input = document.createElement('input');
+        input.type = 'hidden'; input.name = 'csrf_token'; input.value = decodeURIComponent(token);
+        form.appendChild(input);
+      });
+    })();
+  </script>
 </body>
 </html>

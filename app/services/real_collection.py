@@ -11,6 +11,7 @@ from app.services.intake_screening import screen_intake, screen_intake_with_ai
 from app.services.deadline_policy import extract_application_deadline, mark_job_expired
 from app.services.collection_strategy import build_collection_plan
 from app.services.source_library import can_auto_collect
+from app.services.source_candidate_policy import candidate_from_detail, evaluate_candidate
 from app.sources.catalog import ensure_official_source_catalog
 from app.sources.official_list import fetch_official_detail, fetch_official_listings
 from app.sources.shanghai_sasac import (
@@ -19,10 +20,24 @@ from app.sources.shanghai_sasac import (
     fetch_shanghai_sasac_listings,
 )
 from app.sources.spdb import fetch_spdb_shanghai_job_details
+from app.sources.boc import fetch_boc_detail, fetch_boc_listings
+from app.sources.ncss import fetch_ncss_detail, fetch_ncss_shanghai_listings
+from app.sources.campus_json import (
+    SJTU_INTERNSHIP_SOURCE,
+    SUFE_JOB_SOURCE,
+    fetch_campus_announcements,
+    fetch_campus_details,
+)
+from app.sources.sbs_jobs import fetch_sbs_detail, fetch_sbs_listings
 
 
 REAL_SOURCE_NAME = "上海市国资委国企招聘（真实公开来源）"
 SPDB_SOURCE_NAME = "上海浦东发展银行官方招聘"
+BOC_SOURCE_NAME = "中国银行官方招聘"
+NCSS_SOURCE_NAME = "国家大学生就业服务平台上海岗位"
+SJTU_SOURCE_NAME = "上海交通大学就业网（待专用适配）"
+SUFE_SOURCE_NAME = "上海财经大学就业网（待专用适配）"
+SBS_SOURCE_NAME = "上海商学院就业网（待专用适配）"
 REAL_RISK_FLAG = "真实线索：尚未人工核验，不得对外发布"
 
 
@@ -68,12 +83,30 @@ def _content_fingerprint(evidence_text: str) -> str:
     return sha256(normalized.encode("utf-8")).hexdigest()
 
 
+def _parse_published_at(value: object) -> datetime | None:
+    """Store an explicit source publication date separately from collection time."""
+    normalized = str(value or "").strip()
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d"):
+        try:
+            return datetime.strptime(normalized, fmt)
+        except ValueError:
+            continue
+    return None
+
+
 def _attachment_links(detail) -> str:
     return json.dumps(
         [{"name": item.name, "url": item.url} for item in getattr(detail, "attachments", ())],
         ensure_ascii=False,
         separators=(",", ":"),
     )
+
+
+def _evidence_status(detail) -> tuple[str, str]:
+    attachments = tuple(getattr(detail, "attachments", ()) or ())
+    if attachments:
+        return "正文已提取", f"发现 {len(attachments)} 个公开附件入口，需按附件类型单独核验。"
+    return "正文已提取", ""
 
 
 def _record_source_success(source: Source, now: datetime) -> None:
@@ -103,8 +136,12 @@ def _save_detail(
     collected_now: datetime,
     intake_ai_complete=None,
 ) -> str:
-    identity_key = getattr(detail, "identity_key", detail.title)
-    fingerprint = f"{source.name}|{identity_key}|{detail.published_at}|{source.scope_group}|公告"
+    identity_key = str(getattr(detail, "identity_key", "") or "").strip()
+    if not identity_key:
+        identity_key = str(getattr(detail, "detail_url", "") or "").rstrip("/")
+    if not identity_key:
+        identity_key = str(getattr(detail, "title", "") or "").strip()
+    fingerprint = f"{source.name}|{identity_key}"
     job = session.scalar(select(Job).where(Job.fingerprint == fingerprint))
     extracted_deadline = extract_application_deadline(detail.evidence_text)
     if extracted_deadline is not None and extracted_deadline < collected_now.date():
@@ -112,6 +149,7 @@ def _save_detail(
             mark_job_expired(job, extracted_deadline)
         return "expired"
     attachment_links = _attachment_links(detail)
+    evidence_status, evidence_note = _evidence_status(detail)
     content_fingerprint = _content_fingerprint(f"{detail.evidence_text}\n{attachment_links}")
     if job is None:
         intake = (
@@ -123,11 +161,12 @@ def _save_detail(
             Job(
                 fingerprint=fingerprint,
                 employer_name=getattr(detail, "employer_name", f"待人工核验（{source.name}）"),
+                announcement_title=detail.title,
                 job_title=detail.title,
                 job_family="待分类",
                 recruitment_type=getattr(detail, "recruitment_type", "待核验"),
-                location_category=getattr(detail, "location_category", "地区待定"),
-                location_detail=getattr(detail, "location_detail", "以公告原文为准"),
+                location_category=getattr(detail, "location_category", "原文未明确"),
+                location_detail=getattr(detail, "location_detail", ""),
                 target_audience="待人工判断",
                 direction_tags="待人工分类",
                 deadline=getattr(detail, "deadline", "") or (
@@ -136,10 +175,13 @@ def _save_detail(
                 official_url=getattr(detail, "official_url", ""),
                 source_url=detail.detail_url,
                 evidence_text=detail.evidence_text,
+                evidence_status=evidence_status,
+                evidence_note=evidence_note,
                 attachment_links=attachment_links,
                 quality_score=0,
                 risk_flags=REAL_RISK_FLAG,
                 is_demo=False,
+                published_at=_parse_published_at(getattr(detail, "published_at", "")),
                 collected_at=collected_now,
                 content_fingerprint=content_fingerprint,
                 last_verified_at=collected_now,
@@ -155,19 +197,24 @@ def _save_detail(
         )
         return "created"
     if job.content_fingerprint == content_fingerprint:
-        job.collected_at = collected_now
         job.last_verified_at = collected_now
         return "unchanged"
     job.evidence_text = detail.evidence_text
+    job.announcement_title = getattr(detail, "title", "") or job.announcement_title
+    job.evidence_status = evidence_status
+    job.evidence_note = evidence_note
     job.employer_name = getattr(detail, "employer_name", job.employer_name)
     job.official_url = getattr(detail, "official_url", job.official_url)
     job.attachment_links = attachment_links
-    job.collected_at = collected_now
     job.last_verified_at = collected_now
+    job.published_at = _parse_published_at(getattr(detail, "published_at", "")) or job.published_at
     job.content_fingerprint = content_fingerprint
     job.lifecycle_status = "有更新"
     job.last_change_summary = "原文内容发生变化，待人工确认"
     job.status = "待核验"
+    job.risk_flags = REAL_RISK_FLAG
+    job.verification_checks = "{}"
+    job.verification_version = 0
     job.version += 1
     return "updated"
 
@@ -196,6 +243,8 @@ def collect_official_list_source(
                     unchanged_jobs += 1
             except Exception:
                 failed_jobs += 1
+        if failed_jobs == len(listings):
+            raise ValueError("来源列表可读，但全部详情解析失败")
         _record_source_success(source, collected_now)
         session.add(TaskRun(task_name=f"公开采集·{source.name}", status="完成", message=f"新增 {created_jobs} 条，无变化 {unchanged_jobs} 条，有更新 {updated_jobs} 条，单条失败 {failed_jobs} 条。"))
         session.commit()
@@ -236,6 +285,24 @@ def collect_due_sources(
                 result = collect_spdb_shanghai_jobs(
                     session, client, now=collected_now, intake_ai_complete=intake_ai_complete
                 )
+            elif source.adapter_key == "boc_announcements":
+                result = collect_boc_announcements(
+                    session, client, now=collected_now, intake_ai_complete=intake_ai_complete
+                )
+            elif source.adapter_key == "ncss_shanghai_jobs":
+                result = collect_ncss_shanghai_jobs(
+                    session, client, now=collected_now, intake_ai_complete=intake_ai_complete
+                )
+            elif source.adapter_key == "sjtu_internship_json":
+                result = collect_sjtu_internship_jobs(
+                    session, client, now=collected_now, intake_ai_complete=intake_ai_complete
+                )
+            elif source.adapter_key == "sufe_job_json":
+                result = collect_sufe_job_announcements(
+                    session, client, now=collected_now, intake_ai_complete=intake_ai_complete
+                )
+            elif source.adapter_key == "sbs_jobs":
+                result = collect_sbs_jobs(session, client, now=collected_now, intake_ai_complete=intake_ai_complete)
             else:
                 skipped += 1
                 continue
@@ -249,6 +316,254 @@ def collect_due_sources(
     session.add(TaskRun(task_name="每日多来源采集", status="完成" if successful else "失败", message=f"尝试 {attempted} 个来源，成功 {successful} 个，跳过 {skipped} 个；新增 {created} 条，无变化 {unchanged} 条，有更新 {updated} 条，失败 {failed} 项。"))
     session.commit()
     return DailyCollectionResult(attempted, successful, skipped, created, updated, unchanged, failed)
+
+
+def collect_boc_announcements(
+    session: Session, client, limit: int = 12, now: datetime | None = None, intake_ai_complete=None,
+) -> RealCollectionResult:
+    """Collect public Bank of China announcements as unverified national notices."""
+    collected_now = now or datetime.now()
+    ensure_official_source_catalog(session)
+    source = session.scalar(select(Source).where(Source.name == BOC_SOURCE_NAME))
+    if source is None:
+        raise ValueError("中国银行官方招聘来源未配置")
+    source.last_checked_at = collected_now
+    created_jobs = updated_jobs = failed_jobs = unchanged_jobs = 0
+    try:
+        listings = fetch_boc_listings(client, limit=limit)
+        if not listings:
+            raise ValueError("中国银行招聘公告列表未发现带日期的招聘信息，未将其视为没有新招聘")
+        for listing in listings:
+            try:
+                outcome = _save_detail(
+                    session, source, fetch_boc_detail(client, listing), collected_now, intake_ai_complete
+                )
+                if outcome == "created":
+                    created_jobs += 1
+                elif outcome == "updated":
+                    updated_jobs += 1
+                else:
+                    unchanged_jobs += 1
+            except Exception:
+                failed_jobs += 1
+        if failed_jobs == len(listings):
+            raise ValueError("来源列表可读，但全部详情解析失败")
+        _record_source_success(source, collected_now)
+        session.add(TaskRun(task_name=f"公开采集·{source.name}", status="完成", message=f"新增 {created_jobs} 条，无变化 {unchanged_jobs} 条，有更新 {updated_jobs} 条，单条失败 {failed_jobs} 条。"))
+        session.commit()
+        return RealCollectionResult(created_jobs, updated_jobs, failed_jobs, unchanged_jobs, source.status)
+    except Exception as exc:
+        _record_source_failure(source, exc)
+        session.add(TaskRun(task_name=f"公开采集·{source.name}", status="失败", message=f"采集失败：{str(exc)[:300]}"))
+        session.commit()
+        raise
+
+
+def collect_ncss_shanghai_jobs(
+    session: Session, client, limit_pages: int = 3, now: datetime | None = None, intake_ai_complete=None,
+) -> RealCollectionResult:
+    """Collect publicly listed Shanghai NCSS jobs into the unverified review queue."""
+    collected_now = now or datetime.now()
+    ensure_official_source_catalog(session)
+    source = session.scalar(select(Source).where(Source.name == NCSS_SOURCE_NAME))
+    if source is None:
+        raise ValueError("国家大学生就业服务平台上海岗位来源未配置")
+    source.last_checked_at = collected_now
+    created_jobs = updated_jobs = failed_jobs = unchanged_jobs = 0
+    successful_details = 0
+    try:
+        listings = fetch_ncss_shanghai_listings(client, pages=limit_pages)
+        if not listings:
+            raise ValueError("国家大学生就业服务平台上海列表为空，未将其视为没有新招聘")
+        for listing in listings:
+            try:
+                detail = fetch_ncss_detail(client, listing)
+                successful_details += 1
+                decision = evaluate_candidate(
+                    candidate_from_detail(detail, source_listing_url=source.url),
+                    now=collected_now,
+                )
+                if decision.verdict != "qualified":
+                    failed_jobs += 1
+                    continue
+                outcome = _save_detail(session, source, detail, collected_now, intake_ai_complete)
+                if outcome == "created":
+                    created_jobs += 1
+                elif outcome == "updated":
+                    updated_jobs += 1
+                else:
+                    unchanged_jobs += 1
+            except Exception:
+                failed_jobs += 1
+        if successful_details == 0:
+            raise ValueError("来源列表可读，但全部详情解析失败")
+        _record_source_success(source, collected_now)
+        source.last_monitor_summary = (
+            f"国家大学生就业服务平台上海采集：新增 {created_jobs} 条，无变化 {unchanged_jobs} 条，"
+            f"有更新 {updated_jobs} 条，单条跳过或失败 {failed_jobs} 条。"
+        )
+        session.add(
+            TaskRun(
+                task_name="公开采集·国家大学生就业服务平台上海岗位",
+                status="完成",
+                message=f"新增 {created_jobs} 条，无变化 {unchanged_jobs} 条，有更新 {updated_jobs} 条，单条跳过或失败 {failed_jobs} 条。",
+            )
+        )
+        session.commit()
+        return RealCollectionResult(created_jobs, updated_jobs, failed_jobs, unchanged_jobs, source.status)
+    except Exception as exc:
+        _record_source_failure(source, exc)
+        session.add(
+            TaskRun(
+                task_name="公开采集·国家大学生就业服务平台上海岗位",
+                status="失败",
+                message=f"采集失败：{str(exc)[:300]}",
+            )
+        )
+        session.commit()
+        raise
+
+
+def _collect_campus_json_source(
+    session: Session,
+    client,
+    *,
+    source_name: str,
+    campus_source,
+    now: datetime | None = None,
+    intake_ai_complete=None,
+) -> RealCollectionResult:
+    """Collect explicitly Shanghai campus positions into the existing review queue."""
+    collected_now = now or datetime.now()
+    ensure_official_source_catalog(session)
+    source = session.scalar(select(Source).where(Source.name == source_name))
+    if source is None:
+        raise ValueError(f"校园就业来源未配置：{source_name}")
+    source.last_checked_at = collected_now
+    created_jobs = updated_jobs = failed_jobs = unchanged_jobs = non_shanghai_jobs = 0
+    successful_details = 0
+    try:
+        announcements = fetch_campus_announcements(client, campus_source, pages=3)
+        if not announcements:
+            raise ValueError("校园就业网公开列表为空，未将其视为没有新招聘")
+        for announcement in announcements:
+            try:
+                details = fetch_campus_details(client, campus_source, announcement)
+                if not details:
+                    raise ValueError("校园就业网详情未返回岗位")
+                successful_details += 1
+                for detail in details:
+                    decision = evaluate_candidate(
+                        candidate_from_detail(detail, source_listing_url=source.url),
+                        now=collected_now,
+                    )
+                    if "LOCATION_NOT_SHANGHAI" in decision.reason_codes:
+                        non_shanghai_jobs += 1
+                        continue
+                    if decision.verdict != "qualified":
+                        failed_jobs += 1
+                        continue
+                    outcome = _save_detail(session, source, detail, collected_now, intake_ai_complete)
+                    if outcome == "created":
+                        created_jobs += 1
+                    elif outcome == "updated":
+                        updated_jobs += 1
+                    else:
+                        unchanged_jobs += 1
+            except Exception:
+                failed_jobs += 1
+        if successful_details == 0:
+            raise ValueError("校园就业网列表可读，但全部详情解析失败")
+        _record_source_success(source, collected_now)
+        source.last_monitor_summary = (
+            f"{campus_source.name}试采：新增 {created_jobs} 条，无变化 {unchanged_jobs} 条，"
+            f"有更新 {updated_jobs} 条，非上海 {non_shanghai_jobs} 条，详情失败 {failed_jobs} 条。"
+        )
+        session.add(
+            TaskRun(
+                task_name=f"公开采集·{source.name}",
+                status="完成",
+                message=source.last_monitor_summary,
+            )
+        )
+        session.commit()
+        return RealCollectionResult(created_jobs, updated_jobs, failed_jobs, unchanged_jobs, source.status)
+    except Exception as exc:
+        _record_source_failure(source, exc)
+        session.add(TaskRun(task_name=f"公开采集·{source.name}", status="失败", message=f"采集失败：{str(exc)[:300]}"))
+        session.commit()
+        raise
+
+
+def collect_sjtu_internship_jobs(
+    session: Session, client, now: datetime | None = None, intake_ai_complete=None,
+) -> RealCollectionResult:
+    return _collect_campus_json_source(
+        session,
+        client,
+        source_name=SJTU_SOURCE_NAME,
+        campus_source=SJTU_INTERNSHIP_SOURCE,
+        now=now,
+        intake_ai_complete=intake_ai_complete,
+    )
+
+
+def collect_sufe_job_announcements(
+    session: Session, client, now: datetime | None = None, intake_ai_complete=None,
+) -> RealCollectionResult:
+    return _collect_campus_json_source(
+        session,
+        client,
+        source_name=SUFE_SOURCE_NAME,
+        campus_source=SUFE_JOB_SOURCE,
+        now=now,
+        intake_ai_complete=intake_ai_complete,
+    )
+
+
+def collect_sbs_jobs(session: Session, client, pages: int = 3, now: datetime | None = None, intake_ai_complete=None) -> RealCollectionResult:
+    """Collect verified Shanghai Business School public positions into review."""
+    collected_now = now or datetime.now()
+    ensure_official_source_catalog(session)
+    source = session.scalar(select(Source).where(Source.name == SBS_SOURCE_NAME))
+    if source is None:
+        raise ValueError("上海商学院就业网来源未配置")
+    source.last_checked_at = collected_now
+    created_jobs = updated_jobs = failed_jobs = unchanged_jobs = non_shanghai_jobs = 0
+    successful_details = 0
+    try:
+        listings = fetch_sbs_listings(client, pages=pages)
+        if not listings:
+            raise ValueError("上海商学院就业网公开列表为空，未将其视为没有新招聘")
+        for listing in listings:
+            try:
+                detail = fetch_sbs_detail(client, listing)
+                successful_details += 1
+                decision = evaluate_candidate(candidate_from_detail(detail, source_listing_url=source.url), now=collected_now)
+                if "LOCATION_NOT_SHANGHAI" in decision.reason_codes:
+                    non_shanghai_jobs += 1
+                    continue
+                if decision.verdict != "qualified":
+                    failed_jobs += 1
+                    continue
+                outcome = _save_detail(session, source, detail, collected_now, intake_ai_complete)
+                if outcome == "created": created_jobs += 1
+                elif outcome == "updated": updated_jobs += 1
+                else: unchanged_jobs += 1
+            except Exception:
+                failed_jobs += 1
+        if successful_details == 0:
+            raise ValueError("上海商学院就业网列表可读，但全部详情解析失败")
+        _record_source_success(source, collected_now)
+        source.last_monitor_summary = f"上海商学院就业网采集：新增 {created_jobs} 条，无变化 {unchanged_jobs} 条，有更新 {updated_jobs} 条，非上海 {non_shanghai_jobs} 条，详情跳过或失败 {failed_jobs} 条。"
+        session.add(TaskRun(task_name=f"公开采集·{source.name}", status="完成", message=source.last_monitor_summary))
+        session.commit()
+        return RealCollectionResult(created_jobs, updated_jobs, failed_jobs, unchanged_jobs, source.status)
+    except Exception as exc:
+        _record_source_failure(source, exc)
+        session.add(TaskRun(task_name=f"公开采集·{source.name}", status="失败", message=f"采集失败：{str(exc)[:300]}"))
+        session.commit()
+        raise
 
 
 def collect_spdb_shanghai_jobs(
@@ -324,20 +639,24 @@ def collect_shanghai_sasac(
                         Job(
                             fingerprint=fingerprint,
                             employer_name="待人工核验（上海国资招聘公告）",
+                            announcement_title=detail.title,
                             job_title=detail.title,
                             job_family="待分类",
                             recruitment_type="待核验",
-                            location_category="明确上海",
-                            location_detail="上海（公告来源）",
+                            location_category="原文未明确",
+                            location_detail="",
                             target_audience="待人工判断",
                             direction_tags="待人工分类",
                             deadline=extracted_deadline.isoformat() if extracted_deadline else "原文待人工确认",
                             official_url="",
                             source_url=detail.detail_url,
                             evidence_text=detail.evidence_text,
+                            evidence_status="正文已提取",
+                            evidence_note="",
                             quality_score=0,
                             risk_flags=REAL_RISK_FLAG,
                             is_demo=False,
+                            published_at=_parse_published_at(detail.published_at),
                             collected_at=collected_now,
                             content_fingerprint=content_fingerprint,
                             last_verified_at=collected_now,
@@ -353,17 +672,22 @@ def collect_shanghai_sasac(
                     )
                     created_jobs += 1
                 elif job.content_fingerprint == content_fingerprint:
-                    job.collected_at = collected_now
                     job.last_verified_at = collected_now
                     unchanged_jobs += 1
                 else:
                     job.evidence_text = detail.evidence_text
-                    job.collected_at = collected_now
+                    job.announcement_title = detail.title or job.announcement_title
+                    job.evidence_status = "正文已提取"
+                    job.evidence_note = ""
                     job.last_verified_at = collected_now
+                    job.published_at = _parse_published_at(detail.published_at) or job.published_at
                     job.content_fingerprint = content_fingerprint
                     job.lifecycle_status = "有更新"
                     job.last_change_summary = "原文内容发生变化，待人工确认"
                     job.status = "待核验"
+                    job.risk_flags = REAL_RISK_FLAG
+                    job.verification_checks = "{}"
+                    job.verification_version = 0
                     job.version += 1
                     updated_jobs += 1
             except Exception:

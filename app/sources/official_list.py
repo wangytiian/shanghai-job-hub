@@ -6,6 +6,7 @@ from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 
 from app.sources.shanghai_sasac import DATE_PATTERN, USER_AGENT
+from app.sources.content_extraction import extract_article_text
 
 
 RECRUITMENT_PATTERN = re.compile(r"招聘|招录|招考|校园|实习|就业|人才|应聘")
@@ -56,7 +57,7 @@ def parse_official_detail_html(html: str, listing: OfficialListing) -> OfficialD
     soup = BeautifulSoup(html, "html.parser")
     heading = soup.find("h1")
     title = heading.get_text(" ", strip=True) if heading else listing.title
-    page_text = soup.get_text("\n", strip=True)
+    page_text = extract_article_text(soup)
     date_match = DATE_PATTERN.search(page_text)
     published_at = date_match.group(0) if date_match else listing.published_at
     if len(page_text) < 20:
@@ -71,7 +72,7 @@ def parse_official_detail_html(html: str, listing: OfficialListing) -> OfficialD
             continue
         attachments.append(OfficialAttachment(name=name, url=url))
         seen_urls.add(url)
-    return OfficialDetail(title, published_at, listing.detail_url, page_text[:5000], tuple(attachments))
+    return OfficialDetail(title, published_at, listing.detail_url, page_text, tuple(attachments))
 
 
 def _get(client, url: str) -> str:

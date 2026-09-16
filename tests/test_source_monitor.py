@@ -59,7 +59,7 @@ def test_sources_page_shows_v2_library_tiers_and_safe_boundaries():
 
     assert response.status_code == 200
     for label in (
-        "71 家分层来源库",
+        "81 家分层来源库",
         "已验证自动抓取",
         "核心专用适配库",
         "重点监控库",
@@ -68,19 +68,28 @@ def test_sources_page_shows_v2_library_tiers_and_safe_boundaries():
         "不会自动抓取",
     ):
         assert label in response.text
-    assert "上海银行官方招聘（待专用适配）" in response.text
+    assert "上海银行官方招聘" in response.text
+    assert "上海银行官方招聘（待专用适配）" not in response.text
     assert "西门子中国官方招聘（观察库）" in response.text
 
 
 def test_sources_page_uses_actual_a_tier_count_not_a_hardcoded_number():
     response = TestClient(create_app("sqlite+pysqlite:///:memory:")).get("/sources")
 
-    assert "目前只有 A 类 5 家已验证官方来源参与每日采集" in response.text
-    assert "目前只有 A 类 4 家已验证官方来源参与每日采集" not in response.text
+    assert "目前只有 A 类 7 家已验证官方来源参与每日采集" in response.text
+    assert "目前只有 A 类 6 家已验证官方来源参与每日采集" not in response.text
+
+
+def test_sources_page_separates_catalog_demo_and_schedulable_counts():
+    response = TestClient(create_app("sqlite+pysqlite:///:memory:")).get("/sources")
+
+    assert "官方目录来源 81 家" in response.text
+    assert "演示来源 8 家" in response.text
+    assert "当前可调度 7 家" in response.text
 
 
 def test_source_health_check_route_returns_feedback_on_sources_page(monkeypatch):
-    from app.services.source_health import SourceHealthResult
+    from app.services.source_diagnostics import SourceDiagnosticResult
 
     app = create_app("sqlite+pysqlite:///:memory:")
     with app.state.session_factory() as session:
@@ -88,14 +97,39 @@ def test_source_health_check_route_returns_feedback_on_sources_page(monkeypatch)
         source_id = source.id
 
     def fake_check(source, client, checked_at):
-        source.last_monitor_summary = "官网连接正常，仍待专用适配，不参与每日采集"
+        source.last_monitor_summary = "官网可访问，已找到招聘列表信号；仍须完成专用适配和试采后才能自动抓取。"
         source.last_error_summary = ""
         source.last_checked_at = checked_at
-        return SourceHealthResult("success", source.last_monitor_summary)
+        return SourceDiagnosticResult("ok", "recruitment_list", "missing", 200, source.url, 1, 0, source.last_monitor_summary)
 
-    monkeypatch.setattr("app.services.source_health.check_source_connection", fake_check)
+    monkeypatch.setattr("app.services.source_diagnostics.diagnose_source", fake_check)
     response = TestClient(app).post(f"/sources/{source_id}/health-check")
 
     assert response.status_code == 200
-    assert "官网连接正常，仍待专用适配" in response.text
-    assert "验证官网连接" in response.text
+    assert "已找到招聘列表信号" in response.text
+    assert "检查招聘入口" in response.text
+
+
+def test_source_check_persists_a_diagnostic_record_and_explains_the_entry(monkeypatch):
+    from app.models import SourceDiagnostic
+    from app.services.source_diagnostics import SourceDiagnosticResult
+
+    app = create_app("sqlite+pysqlite:///:memory:")
+    with app.state.session_factory() as session:
+        source_id = session.query(Source).filter_by(name="上海银行官方招聘（待专用适配）").one().id
+
+    def fake_diagnose(source, client, checked_at):
+        source.last_checked_at = checked_at
+        source.last_monitor_summary = "官网可访问，但当前入口不是招聘列表，尚不可自动采集。"
+        return SourceDiagnosticResult(
+            "ok", "wrong_entry", "missing", 200, source.url, 0, 0, source.last_monitor_summary
+        )
+
+    monkeypatch.setattr("app.services.source_diagnostics.diagnose_source", fake_diagnose)
+    response = TestClient(app).post(f"/sources/{source_id}/health-check")
+
+    assert response.status_code == 200
+    assert "当前入口不是招聘列表" in response.text
+    with app.state.session_factory() as session:
+        record = session.query(SourceDiagnostic).filter_by(source_id=source_id).one()
+        assert record.content_status == "wrong_entry"

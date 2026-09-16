@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Protocol
+from typing import Callable, Protocol
 from urllib.parse import urlparse
 
 import httpx
@@ -88,15 +88,22 @@ class BailianClient:
 
 
 class OpenAICompatibleClient:
+    def __init__(self, validate_outbound: Callable[[str], str] | None = None):
+        self.validate_outbound = validate_outbound
+
     @staticmethod
     def _endpoint_url(base_url: str, api_mode: str) -> str:
         cleaned = base_url.strip().rstrip("/")
         suffix = "/responses" if api_mode == OPENAI_API_MODE_RESPONSES else "/chat/completions"
         return cleaned if cleaned.endswith(suffix) else f"{cleaned}{suffix}"
 
+    def _safe_endpoint_url(self, base_url: str, api_mode: str) -> str:
+        endpoint = self._endpoint_url(base_url, api_mode)
+        return self.validate_outbound(endpoint) if self.validate_outbound else endpoint
+
     def test_connection(self, api_key: str, base_url: str, model: str) -> None:
         response = httpx.post(
-            self._endpoint_url(base_url, OPENAI_API_MODE_CHAT_COMPLETIONS),
+            self._safe_endpoint_url(base_url, OPENAI_API_MODE_CHAT_COMPLETIONS),
             headers={"Authorization": f"Bearer {api_key}"},
             json={"model": model, "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1},
             timeout=15.0,
@@ -141,7 +148,7 @@ class OpenAICompatibleClient:
                 "temperature": 0.1,
             }
         response = httpx.post(
-            self._endpoint_url(base_url, api_mode),
+            self._safe_endpoint_url(base_url, api_mode),
             headers={"Authorization": f"Bearer {api_key}"},
             json=payload,
             timeout=45.0,
@@ -170,12 +177,21 @@ def _normalize_base_url(value: str) -> str:
 
 
 class AiSettingsService:
-    def __init__(self, credential_store: CredentialStore | None = None, bailian_client=None, openai_client=None):
+    def __init__(
+        self,
+        credential_store: CredentialStore | None = None,
+        bailian_client=None,
+        openai_client=None,
+        credential_store_factory: Callable[[str], CredentialStore] | None = None,
+    ):
         self.credential_store = credential_store or WindowsCredentialStore(BAILIAN_PROVIDER)
+        self.credential_store_factory = credential_store_factory
         self.bailian_client = bailian_client or BailianClient()
         self.openai_client = openai_client or OpenAICompatibleClient()
 
     def _credential_store_for(self, provider: str) -> CredentialStore:
+        if self.credential_store_factory is not None:
+            return self.credential_store_factory(provider)
         return WindowsCredentialStore(provider) if isinstance(self.credential_store, WindowsCredentialStore) else self.credential_store
 
     def get_setting(self, session: Session, provider: str = BAILIAN_PROVIDER) -> AiProviderSetting:

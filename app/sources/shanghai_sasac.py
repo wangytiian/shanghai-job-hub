@@ -7,6 +7,8 @@ from urllib.parse import urljoin
 import httpx
 from bs4 import BeautifulSoup
 
+from app.sources.content_extraction import extract_article_text
+
 
 LISTING_URL = "https://www.gzw.sh.gov.cn/shgzw_xxgk_cqzp/"
 USER_AGENT = "LixinRecruitingLocal/0.1 (public-information-research; local-only)"
@@ -59,20 +61,13 @@ def parse_detail_html(html: str, listing: ShanghaiSasacListing) -> ShanghaiSasac
         raise ValueError("来源页面访问受限，未取得招聘正文")
     heading = soup.find("h1")
     title = heading.get_text(" ", strip=True) if heading else listing.title
-    page_text = soup.get_text("\n", strip=True)
+    page_text = extract_article_text(soup)
     date_match = DATE_PATTERN.search(page_text)
     published_at = date_match.group(0) if date_match else listing.published_at
-    paragraphs = [
-        item.get_text(" ", strip=True)
-        for item in soup.find_all(["p", "div"])
-        if item.get_text(" ", strip=True)
-    ]
-    body_text = "\n".join(dict.fromkeys(paragraphs))
-    if len(body_text) < 20:
-        body_text = page_text
+    body_text = page_text
     if len(body_text) < 20:
         raise ValueError("公告详情页未提取到可保存的正文")
-    evidence_text = body_text[:5000]
+    evidence_text = body_text
     return ShanghaiSasacDetail(
         title=title,
         published_at=published_at,

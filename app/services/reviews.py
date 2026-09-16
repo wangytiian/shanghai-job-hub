@@ -16,6 +16,7 @@ def review_job(
     action: ReviewAction,
     note: str,
     operator_name: str,
+    actor_user_id: int | None = None,
 ) -> Job:
     job = session.get(Job, job_id)
     if job is None:
@@ -53,6 +54,7 @@ def review_job(
             action=log_action,
             note=note,
             operator_name=operator_name,
+            actor_user_id=actor_user_id,
         )
     )
     session.commit()

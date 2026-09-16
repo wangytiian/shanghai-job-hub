@@ -81,6 +81,7 @@ def create_pending_child_jobs(
             child = Job(
                 fingerprint=fingerprint,
                 employer_name=parent.employer_name,
+                announcement_title=parent.announcement_title or parent.job_title,
                 job_title=candidate.title,
                 job_family="待人工分类",
                 recruitment_type=parent.recruitment_type,

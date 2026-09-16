@@ -7,7 +7,9 @@ class Base(DeclarativeBase):
     pass
 
 
-def create_database(database_url: str):
+def create_session_factory(database_url: str):
+    if database_url.startswith("postgresql://"):
+        database_url = "postgresql+psycopg://" + database_url.removeprefix("postgresql://")
     if database_url.endswith(":memory:"):
         engine = create_engine(
             database_url,
@@ -16,9 +18,16 @@ def create_database(database_url: str):
         )
     else:
         engine = create_engine(database_url)
+    return sessionmaker(bind=engine, expire_on_commit=False)
+
+
+def create_database(database_url: str):
+    """Create or upgrade a local/test schema. Cloud schema is Alembic-managed."""
+    session_factory = create_session_factory(database_url)
+    engine = session_factory.kw["bind"]
     Base.metadata.create_all(engine)
     _upgrade_sqlite_columns(engine)
-    return sessionmaker(bind=engine, expire_on_commit=False)
+    return session_factory
 
 
 def _upgrade_sqlite_columns(engine) -> None:
@@ -31,14 +40,27 @@ def _upgrade_sqlite_columns(engine) -> None:
             "ai_content_json": "TEXT NOT NULL DEFAULT ''",
             "ai_content_status": "VARCHAR(20) NOT NULL DEFAULT '基础稿'",
             "ai_content_error": "TEXT NOT NULL DEFAULT ''",
+            "job_version": "INTEGER NOT NULL DEFAULT 1",
+            "template_version": "VARCHAR(30) NOT NULL DEFAULT 'finjob-v1'",
+            "row_version": "INTEGER NOT NULL DEFAULT 1",
+            "updated_by_user_id": "INTEGER",
+            "is_manually_edited": "BOOLEAN NOT NULL DEFAULT 0",
+            "published_by_user_id": "INTEGER",
+            "published_at": "DATETIME",
+            "published_url": "VARCHAR(500) NOT NULL DEFAULT ''",
         },
         "ai_provider_settings": {
             "base_url": "VARCHAR(500) NOT NULL DEFAULT ''",
             "api_mode": "VARCHAR(30) NOT NULL DEFAULT 'chat_completions'",
             "is_active_text_provider": "BOOLEAN NOT NULL DEFAULT 0",
+            "row_version": "INTEGER NOT NULL DEFAULT 1",
         },
         "jobs": {
             "is_demo": "BOOLEAN NOT NULL DEFAULT 1",
+            "announcement_title": "VARCHAR(200) NOT NULL DEFAULT ''",
+            "evidence_status": "VARCHAR(30) NOT NULL DEFAULT '正文已提取'",
+            "evidence_note": "TEXT NOT NULL DEFAULT ''",
+            "published_at": "DATETIME",
             "collected_at": "DATETIME",
             "content_fingerprint": "VARCHAR(64) NOT NULL DEFAULT ''",
             "last_verified_at": "DATETIME",
@@ -68,8 +90,15 @@ def _upgrade_sqlite_columns(engine) -> None:
             "ai_score_confidence": "VARCHAR(10) NOT NULL DEFAULT '低'",
             "ai_scored_at": "DATETIME",
             "verification_checks": "TEXT NOT NULL DEFAULT '{}'",
+            "verification_version": "INTEGER NOT NULL DEFAULT 0",
+            "row_version": "INTEGER NOT NULL DEFAULT 1",
+            "updated_by_user_id": "INTEGER",
+        },
+        "review_logs": {
+            "actor_user_id": "INTEGER",
         },
         "sources": {
+            "source_key": "VARCHAR(80)",
             "adapter_key": "VARCHAR(60) NOT NULL DEFAULT ''",
             "scope_group": "VARCHAR(80) NOT NULL DEFAULT ''",
             "is_enabled": "BOOLEAN NOT NULL DEFAULT 0",
@@ -84,6 +113,13 @@ def _upgrade_sqlite_columns(engine) -> None:
             "next_action": "VARCHAR(160) NOT NULL DEFAULT '等待人工复查'",
             "official_career_url": "VARCHAR(500) NOT NULL DEFAULT ''",
             "last_monitor_summary": "TEXT NOT NULL DEFAULT '等待首次检查'",
+            "validation_state": "VARCHAR(30) NOT NULL DEFAULT '未验证'",
+            "adapter_version": "VARCHAR(40) NOT NULL DEFAULT '1'",
+            "validated_adapter_version": "VARCHAR(40) NOT NULL DEFAULT ''",
+            "validated_rule_version": "VARCHAR(40) NOT NULL DEFAULT ''",
+            "validated_at": "DATETIME",
+            "validated_by": "VARCHAR(80) NOT NULL DEFAULT ''",
+            "next_probe_at": "DATETIME",
         },
     }
     with engine.begin() as connection:
@@ -98,3 +134,14 @@ def _upgrade_sqlite_columns(engine) -> None:
                     connection.execute(
                         text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}")
                     )
+        if "sources" in table_names:
+            connection.execute(
+                text("CREATE UNIQUE INDEX IF NOT EXISTS ux_sources_source_key ON sources(source_key)")
+            )
+        if "source_trial_runs" in table_names:
+            connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ux_source_trial_running_source "
+                    "ON source_trial_runs(source_id) WHERE state = 'running'"
+                )
+            )

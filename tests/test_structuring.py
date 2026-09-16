@@ -3,6 +3,8 @@ import pytest
 
 from app.models import Job, ReviewLog
 from app.services.structuring import StructuringInput, structure_job
+from app.services.jobs import validate_publishable
+from app.services.concurrency import EditConflict
 
 
 def _pending_verification_job(session) -> Job:
@@ -80,6 +82,15 @@ def test_structure_job_saves_human_verification_checks(session):
     assert session.query(ReviewLog).filter_by(job_id=job.id, action="人工核验清单已确认").count() == 1
 
 
+def test_structure_job_rejects_stale_collaboration_row_version(session):
+    job = _pending_verification_job(session)
+    job.row_version = 2
+    session.commit()
+
+    with pytest.raises(EditConflict):
+        structure_job(session, job.id, _valid_input(), "本地管理员", expected_row_version=1)
+
+
 def test_structure_job_requires_official_link_and_audience(session):
     job = _pending_verification_job(session)
 
@@ -149,3 +160,18 @@ def test_structure_job_keeps_attachment_pending_announcement_in_verification(ses
             _valid_input(posting_scope="attachment_pending", attachment_status="pending"),
             "本地管理员",
         )
+
+
+def test_publish_gate_requires_saved_human_checks_and_student_distribution_fit(session):
+    job = _pending_verification_job(session)
+    result = structure_job(session, job.id, _valid_input(), "本地管理员")
+    result.status = "待审核"
+    result.risk_flags = ""
+    result.verification_checks = "{}"
+    result.student_fit_level = "待人工判断"
+    result.distribution_recommendation = ""
+
+    errors = validate_publishable(result)
+
+    assert "人工核验清单未完整确认" in errors
+    assert "学生适配或分发建议未确认" in errors

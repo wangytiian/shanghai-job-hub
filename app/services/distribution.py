@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.models import DistributionItem, Job
 from app.services.ai_content_draft import ContentDraft
 from app.services.jobs import UNSPECIFIED_DEADLINE
+from app.services.jobs import validate_publishable
 
 
 NON_OFFICIAL_NOTICE = "本内容为面向上海立信会计金融学院学生的非官方就业信息服务；请以官方原文为准。"
@@ -133,7 +134,8 @@ def build_wechat_draft(job: Job, content_draft: ContentDraft | None = None) -> W
     )
     career_advice = ai_content.career_advice or "投递前建议结合岗位方向，整理课程项目、实习或社团经历，突出与岗位相关的能力。"
     apply_tip = ai_content.apply_tip or "投递前请再次核对官方公告中的材料、入口和时间要求。"
-    draft_title = f"{job.employer_name}{job.job_title}招聘"
+    title_basis = job.announcement_title if is_summary and job.announcement_title else job.job_title
+    draft_title = f"{job.employer_name}{title_basis}招聘"
     digest_parts = [job.recruitment_type]
     if _known(job.location_detail):
         digest_parts.append(job.location_detail)
@@ -198,6 +200,9 @@ def create_distribution_items(session: Session, job_id: int) -> list[Distributio
         raise ValueError("岗位不存在")
     if job.status != "可发布":
         raise ValueError("只有可发布岗位可以生成分发内容")
+    errors = validate_publishable(job)
+    if errors:
+        raise ValueError("；".join(errors))
     if job.intake_grade not in {"A", "B"}:
         raise ValueError("该岗位入库分级为 C/D，只有 A/B 级岗位可以进入学生渠道分发")
     if job.distribution_recommendation == "不进入学生分发":
@@ -207,10 +212,23 @@ def create_distribution_items(session: Session, job_id: int) -> list[Distributio
     for channel, audience_group, content in wanted:
         item = session.scalar(select(DistributionItem).where(DistributionItem.job_id == job.id, DistributionItem.channel == channel))
         if item is None:
-            item = DistributionItem(job_id=job.id, channel=channel, audience_group=audience_group, content=content)
+            item = DistributionItem(
+                job_id=job.id,
+                channel=channel,
+                audience_group=audience_group,
+                content=content,
+                job_version=job.version,
+                template_version="finjob-v1",
+            )
             session.add(item)
         else:
             item.audience_group, item.content = audience_group, content
+            if item.job_version != job.version:
+                item.job_version = job.version
+                item.template_version = "finjob-v1"
+                item.ai_content_json = ""
+                item.ai_content_status = "基础稿"
+                item.ai_content_error = "岗位事实已更新，原 AI 内容已失效，请重新提炼。"
         items.append(item)
     session.commit()
     return items

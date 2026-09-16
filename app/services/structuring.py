@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 from sqlalchemy.orm import Session
 
 from app.models import Job, ReviewLog
+from app.services.concurrency import assert_version
 from app.services.jobs import UNSPECIFIED_DEADLINE
 
 
@@ -31,6 +32,7 @@ class StructuringInput:
     ai_rationale: str = ""
     ai_confidence: str = "低"
     verification_checks: dict[str, bool] | None = None
+    announcement_title: str = ""
 
 
 class StructuringValidationError(ValueError):
@@ -101,6 +103,7 @@ def structure_job(
     job_id: int,
     data: StructuringInput,
     operator_name: str,
+    expected_row_version: int | None = None,
 ) -> Job:
     _validate_input(data)
     job = session.get(Job, job_id)
@@ -110,8 +113,12 @@ def structure_job(
         raise ValueError("只有待核验公告可以结构化")
     if job.notice_type != "新招聘":
         raise ValueError("只有确认为新招聘的公告可以结构化")
+    if expected_row_version is not None:
+        assert_version(actual=job.row_version, expected=expected_row_version)
 
     normalized_deadline = _normalize_deadline(data.deadline)
+    job.version += 1
+    job.row_version += 1
     for field_name in (
         "employer_name",
         "job_title",
@@ -132,9 +139,11 @@ def structure_job(
         "ai_confidence",
     ):
         setattr(job, field_name, getattr(data, field_name).strip())
+    job.announcement_title = data.announcement_title.strip() or job.announcement_title or job.job_title
     job.deadline = normalized_deadline
     job.quality_score = data.quality_score
     job.verification_checks = json.dumps(data.verification_checks or {}, ensure_ascii=False, sort_keys=True)
+    job.verification_version = job.version
     job.risk_flags = "待最终人工审核：结构化字段已由运营人员补齐"
     job.status = "待审核"
     job.last_change_summary = "人工完成公告结构化，等待最终审核"

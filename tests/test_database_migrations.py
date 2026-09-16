@@ -54,6 +54,40 @@ def test_database_adds_source_library_columns_without_resetting_sources(tmp_path
     assert saved == "旧来源"
 
 
+def test_database_adds_source_trial_schema_and_validation_columns_to_existing_sqlite(tmp_path):
+    database_path = tmp_path / "legacy-trials.db"
+    connection = sqlite3.connect(database_path)
+    connection.execute(
+        "CREATE TABLE sources (id INTEGER PRIMARY KEY, name VARCHAR(120) NOT NULL UNIQUE, url VARCHAR(500) NOT NULL, level VARCHAR(10) NOT NULL, source_type VARCHAR(30) NOT NULL)"
+    )
+    connection.execute(
+        "INSERT INTO sources (name, url, level, source_type) VALUES ('旧来源', 'https://example.com', '一级', '企业官网')"
+    )
+    connection.commit()
+    connection.close()
+
+    create_database(f"sqlite:///{database_path.as_posix()}")
+
+    connection = sqlite3.connect(database_path)
+    source_columns = {row[1] for row in connection.execute("PRAGMA table_info(sources)")}
+    tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    saved = connection.execute("SELECT name FROM sources").fetchone()[0]
+    connection.close()
+
+    assert {
+        "source_key",
+        "validation_state",
+        "adapter_version",
+        "validated_adapter_version",
+        "validated_rule_version",
+        "validated_at",
+        "validated_by",
+        "next_probe_at",
+    }.issubset(source_columns)
+    assert {"source_trial_runs", "source_trial_samples"}.issubset(tables)
+    assert saved == "旧来源"
+
+
 def test_database_creates_safe_ai_provider_settings_table_without_api_key(tmp_path):
     database_path = tmp_path / "legacy.db"
     connection = sqlite3.connect(database_path)

@@ -1,0 +1,18 @@
+{
+  "code": 200,
+  "data": {
+    "records": [
+      {
+        "zpxxid": "sjtu-100",
+        "zpzt": "上海示例咨询公司 2027 届实习生招聘",
+        "fbrq": "2026-09-06"
+      },
+      {
+        "zpxxid": "sjtu-101",
+        "zpzt": "北京示例公司实习生招聘",
+        "fbrq": "2026-09-05",
+        "detailUrl": "https://www.job.sjtu.edu.cn/career/zpxx/detail/sjtu-101"
+      }
+    ]
+  }
+}

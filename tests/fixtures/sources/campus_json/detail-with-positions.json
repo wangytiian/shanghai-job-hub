@@ -1,0 +1,29 @@
+{
+  "code": 200,
+  "data": {
+    "zpxxid": "sjtu-100",
+    "zpzt": "上海示例咨询公司 2027 届实习生招聘",
+    "fbrq": "2026-09-06",
+    "zpxxEditor": "<p>面向 2027 届在校生开放实习岗位。</p><p>请准备中英文简历。</p>",
+    "xxdz": "上海市徐汇区示例路 1 号",
+    "szxmc": "上海示例咨询有限公司",
+    "zpxxwz": "https://jobs.example.edu.cn/apply/sjtu-100",
+    "zpurl": "https://jobs.example.edu.cn/official/sjtu-100",
+    "yurl": "https://jobs.example.edu.cn/campus/sjtu-100",
+    "jltdyx": "campus@example.edu.cn",
+    "zwxxList": [
+      {
+        "zwxxid": "position-a",
+        "zwmc": "财务分析实习生",
+        "zwms": "协助财务分析、尽职调查和报告整理。",
+        "gzdd": "上海市浦东新区"
+      },
+      {
+        "zwxxid": "position-b",
+        "zwmc": "数据分析实习生",
+        "zwms": "协助数据清洗和经营分析。",
+        "gzdd": "北京市朝阳区"
+      }
+    ]
+  }
+}

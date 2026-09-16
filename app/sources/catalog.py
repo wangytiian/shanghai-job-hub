@@ -1,15 +1,17 @@
 from dataclasses import dataclass
+from hashlib import sha256
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Source
+from app.models import Source, SourceDiagnostic
 from app.sources.shanghai_sasac import LISTING_URL as SHANGHAI_SASAC_URL
 
 
 @dataclass(frozen=True)
 class OfficialSourceDefinition:
     name: str
+    source_key: str
     url: str
     level: str
     source_type: str
@@ -30,9 +32,10 @@ _TIER_DEFAULTS = {
 }
 
 
-def _source(name: str, url: str, scope_group: str, tier: str, score: int, *, adapter_key: str = "pending_validation", source_type: str = "企业官网") -> OfficialSourceDefinition:
+def _source(name: str, url: str, scope_group: str, tier: str, score: int, *, adapter_key: str = "pending_validation", source_type: str = "企业官网", source_key: str = "") -> OfficialSourceDefinition:
     is_enabled, adaptation_status, next_action = _TIER_DEFAULTS[tier]
-    return OfficialSourceDefinition(name, url, "一级", source_type, adapter_key, scope_group, is_enabled, tier, score, adaptation_status, next_action)
+    stable_key = source_key or f"official-{sha256(name.encode('utf-8')).hexdigest()[:16]}"
+    return OfficialSourceDefinition(name, stable_key, url, "一级", source_type, adapter_key, scope_group, is_enabled, tier, score, adaptation_status, next_action)
 
 
 OFFICIAL_SOURCE_CATALOG = (
@@ -41,7 +44,95 @@ OFFICIAL_SOURCE_CATALOG = (
     _source("上海市人社局事业单位公开招聘", "https://rsj.sh.gov.cn/tsydwgkzp_17406/index.html", "上海事业单位", "A", 92, adapter_key="official_dated_list", source_type="政府公开栏目"),
     _source("国务院国资委人事招聘", "https://www.sasac.gov.cn/n2588035/n2588325/n2588350/index.html", "央企全国", "A", 90, adapter_key="official_dated_list", source_type="政府公开栏目"),
     _source("上海市税务局公务员招录", "https://shanghai.chinatax.gov.cn/xxgk/rsxx/gwyzl/", "上海公共部门", "A", 90, adapter_key="official_dated_list", source_type="政府公开栏目"),
+    _source(
+        "国家大学生就业服务平台上海岗位",
+        "https://www.ncss.cn/student/jobs/index.html",
+        "上海学生就业",
+        "B",
+        88,
+        adapter_key="ncss_shanghai_jobs",
+        source_type="国家公共就业平台",
+        source_key="ncss-shanghai",
+    ),
+    _source(
+        "上海商学院就业网（待专用适配）",
+        "https://jiuye.sbs.edu.cn/PositionList.aspx/",
+        "上海学生就业",
+        "A",
+        86,
+        adapter_key="sbs_jobs",
+        source_type="高校就业平台",
+        source_key="sbs-jobs",
+    ),
     # B: core sites awaiting a dedicated public-page adapter
+    _source(
+        "华东理工大学就业网（待专用适配）",
+        "https://career.ecust.edu.cn/PositionList2.aspx/",
+        "上海学生就业",
+        "B",
+        88,
+        source_type="高校就业平台",
+    ),
+    _source(
+        "上海交通大学就业网（待专用适配）",
+        "https://www.job.sjtu.edu.cn/career/index",
+        "上海学生就业",
+        "B",
+        87,
+        adapter_key="sjtu_internship_json",
+        source_type="高校就业平台",
+        source_key="sjtu-internships",
+    ),
+    _source(
+        "上海财经大学就业网（待专用适配）",
+        "https://career.sufe.edu.cn/career/zpxx/zpxx",
+        "上海学生就业",
+        "B",
+        87,
+        adapter_key="sufe_job_json",
+        source_type="高校就业平台",
+        source_key="sufe-jobs",
+    ),
+    _source(
+        "华东师范大学就业网（待专用适配）",
+        "https://career.ecnu.edu.cn/",
+        "上海学生就业",
+        "B",
+        84,
+        source_type="高校就业平台",
+    ),
+    _source(
+        "上海大学就业网（待专用适配）",
+        "https://job.shu.edu.cn/",
+        "上海学生就业",
+        "B",
+        83,
+        source_type="高校就业平台",
+    ),
+    _source(
+        "上海理工大学就业网（待专用适配）",
+        "https://91.usst.edu.cn/",
+        "上海学生就业",
+        "B",
+        82,
+        source_type="高校就业平台",
+    ),
+    _source(
+        "上海对外经贸大学就业网（待专用适配）",
+        "https://job.suibe.edu.cn/",
+        "上海学生就业",
+        "B",
+        84,
+        source_type="高校就业平台",
+    ),
+    _source(
+        "上海公共就业服务平台（待专用适配）",
+        "https://jobs.rsj.sh.gov.cn/",
+        "上海公共就业",
+        "B",
+        80,
+        source_type="政府公共就业平台",
+    ),
     _source("上海银行官方招聘（待专用适配）", "https://hr.bosc.cn/", "上海金融", "B", 88),
     _source("上海浦东发展银行官方招聘", "https://job.spdb.com.cn/", "上海金融", "A", 88, adapter_key="spdb_shanghai_jobs"),
     _source("上海农村商业银行官方招聘（待专用适配）", "https://job.srcb.com/", "上海金融", "B", 86),
@@ -61,7 +152,7 @@ OFFICIAL_SOURCE_CATALOG = (
     _source("建设银行官方招聘（待专用适配）", "https://www1.ccb.com/cn/recruit/index.html", "银行", "B", 82),
     _source("工商银行官方招聘（待专用适配）", "https://job.icbc.com.cn/", "银行", "B", 82),
     _source("农业银行官方招聘（待专用适配）", "https://career.abchina.com/", "银行", "B", 80),
-    _source("中国银行官方招聘（待专用适配）", "https://www.boc.cn/aboutboc/ab8/", "银行", "B", 80),
+    _source("中国银行官方招聘", "https://www.boc.cn/aboutboc/bi4/", "银行", "A", 80, adapter_key="boc_announcements"),
     _source("交通银行官方招聘（待专用适配）", "https://job.bankcomm.com/", "银行", "B", 84),
     _source("招商银行官方招聘（待专用适配）", "https://career.cmbchina.com/social/home", "银行", "B", 82),
     _source("中信银行官方招聘（待专用适配）", "https://job.citicbank.com/", "银行", "B", 82),
@@ -125,11 +216,22 @@ OFFICIAL_SOURCE_CATALOG = (
 _LEGACY_SOURCE_RENAMES = {
     "花旗官方招聘（待专用适配）": "花旗官方招聘（重点监控）",
     "上海浦东发展银行官方招聘（待专用适配）": "上海浦东发展银行官方招聘",
+    "中国银行官方招聘（待专用适配）": "中国银行官方招聘",
+}
+
+
+_A_TRIAL_PROMOTIONS = {
+    "sbs-jobs": {
+        "adaptation_status": "A类试运行（自动采集，人工核验）",
+        "next_action": "每8小时采集；连续7天观察并人工核验",
+        "validation_state": "A类试运行",
+        "check_frequency_hours": 8,
+    },
 }
 
 
 def ensure_official_source_catalog(session: Session) -> None:
-    """Register the curated catalog without changing an operator's health decisions."""
+    """Register catalog defaults once without replacing operator-managed settings."""
     for legacy_name, catalog_name in _LEGACY_SOURCE_RENAMES.items():
         legacy_source = session.scalar(select(Source).where(Source.name == legacy_name))
         catalog_source = session.scalar(select(Source).where(Source.name == catalog_name))
@@ -138,6 +240,9 @@ def ensure_official_source_catalog(session: Session) -> None:
         if catalog_source is None:
             legacy_source.name = catalog_name
         else:
+            session.query(SourceDiagnostic).filter(
+                SourceDiagnostic.source_id == legacy_source.id
+            ).update({SourceDiagnostic.source_id: catalog_source.id})
             session.delete(legacy_source)
         session.flush()
     for definition in OFFICIAL_SOURCE_CATALOG:
@@ -145,9 +250,17 @@ def ensure_official_source_catalog(session: Session) -> None:
         values = definition.__dict__ | {"official_career_url": definition.url}
         if source is None:
             session.add(Source(**values, status="正常", check_frequency_hours=4))
+        elif not source.source_key:
+            source.source_key = definition.source_key
+    for source_key, promotion in _A_TRIAL_PROMOTIONS.items():
+        source = session.scalar(select(Source).where(Source.source_key == source_key))
+        if source is None:
             continue
-        for field, value in values.items():
-            setattr(source, field, value)
-        if definition.library_tier != "A":
-            source.is_enabled = False
+        source.library_tier = "A"
+        source.adaptation_status = promotion["adaptation_status"]
+        source.next_action = promotion["next_action"]
+        source.validation_state = promotion["validation_state"]
+        source.check_frequency_hours = promotion["check_frequency_hours"]
+        if source.status != "暂停":
+            source.is_enabled = True
     session.commit()

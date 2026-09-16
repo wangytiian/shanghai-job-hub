@@ -24,3 +24,21 @@ def test_rejects_access_denied_page_instead_of_saving_navigation_as_evidence():
 
     with pytest.raises(ValueError, match="访问受限"):
         parse_detail_html(blocked_html, listing)
+
+
+def test_prefers_article_body_and_excludes_navigation_and_footer():
+    listing = ShanghaiSasacListing("上海示例国企暑期实习启动", "2026-06-08", "https://example.com/a")
+    html = """
+    <html><body>
+      <nav>首页 信息公开 联系我们</nav>
+      <main class="article-content"><h1>上海示例国企暑期实习启动</h1>
+      <p>报名时间：2026年6月8日至2026年6月18日。</p><p>面向2027届学生招聘财务实习生。</p></main>
+      <footer>版权所有 网站地图</footer>
+    </body></html>
+    """
+
+    detail = parse_detail_html(html, listing)
+
+    assert "面向2027届学生" in detail.evidence_text
+    assert "首页 信息公开" not in detail.evidence_text
+    assert "版权所有" not in detail.evidence_text

@@ -1,4 +1,5 @@
 from datetime import date
+import json
 
 from app.models import Job
 from app.services.deadline_policy import job_application_deadline
@@ -18,6 +19,23 @@ PLACEHOLDER_VALUES = {
     "原文未明确",
 }
 
+REQUIRED_VERIFICATION_CHECKS = {
+    "source_checked": "原始来源",
+    "scope_checked": "岗位或公告范围",
+    "audience_checked": "面向学生人群",
+    "location_checked": "工作地点",
+    "application_checked": "官方投递入口",
+    "timeliness_checked": "时效",
+}
+
+
+def verification_checks_complete(value: str) -> bool:
+    try:
+        checks = json.loads(value or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return False
+    return isinstance(checks, dict) and all(checks.get(key) is True for key in REQUIRED_VERIFICATION_CHECKS)
+
 
 def validate_publishable(job: Job, today: date | None = None) -> list[str]:
     errors: list[str] = []
@@ -35,6 +53,16 @@ def validate_publishable(job: Job, today: date | None = None) -> list[str]:
         errors.append("公告范围不满足发布条件")
     if job.attachment_status == "pending":
         errors.append("附件尚未核验")
+    if not verification_checks_complete(job.verification_checks):
+        errors.append("人工核验清单未完整确认")
+    elif job.verification_version != job.version:
+        errors.append("核验结果已过期，请按最新公告事实重新确认")
+    if job.student_fit_level not in {"核心适配", "补充适配", "不适合核心学生用户"} or job.distribution_recommendation not in {
+        "进入学生分发审核",
+        "仅保留资料库",
+        "不进入学生分发",
+    }:
+        errors.append("学生适配或分发建议未确认")
     for value in (job.job_title, job.target_audience, job.location_detail, job.deadline):
         if value.strip() in PLACEHOLDER_VALUES:
             errors.append("存在占位字段")

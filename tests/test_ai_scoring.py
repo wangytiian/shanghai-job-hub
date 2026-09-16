@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 
 from app.models import Job
 from app.services.ai_scoring import suggest_job_score
@@ -91,3 +91,32 @@ def test_c_grade_suggested_score_is_capped_below_priority_threshold():
     )
 
     assert result.score == 69
+
+
+def test_freshness_uses_original_publication_date_not_latest_collection_time():
+    job = make_job(collected_at=datetime(2026, 9, 5), published_at=datetime(2026, 8, 20))
+
+    result = suggest_job_score(job, today=date(2026, 9, 5))
+
+    assert result.breakdown["时效性"] == 1
+
+
+def test_location_score_does_not_treat_source_city_as_workplace_proof():
+    job = make_job(
+        location_category="原文未明确",
+        location_detail="",
+        evidence_text="上海市某单位发布招聘公告，具体工作地点以附件为准。",
+    )
+
+    result = suggest_job_score(job, today=date.today())
+
+    assert result.breakdown["上海关联"] == 0
+
+
+def test_expired_job_is_not_eligible_for_ai_suggested_score():
+    job = make_job(deadline="2026-08-01")
+
+    result = suggest_job_score(job, today=date(2026, 9, 5))
+
+    assert result.eligible is False
+    assert result.reason == "报名已截止，不进入建议分队列。"

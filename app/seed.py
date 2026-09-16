@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime
+import json
 
 from sqlalchemy import select
 
@@ -35,6 +36,20 @@ DEMO_JOBS = (
     ("示例科技企业|2027届暑期实习|数据分析|上海|2027届", "示例科技企业", "数据分析实习生", "数据分析", "实习", "明确上海", "上海市闵行区", "大三实习", "数据技术、经济统计", "2026-09-25", 84, "待审核"),
     ("示例公共服务机构|2027届校园招聘|综合管理|上海|2027届", "示例公共服务机构", "综合管理岗", "综合管理", "校招", "明确上海", "上海市普陀区", "大四/应届校招", "公共管理、语言及综合职能", "2026-10-30", 78, "待审核"),
     ("示例国际贸易公司|2026届初级招聘|商务运营|上海|毕业两年内", "示例国际贸易公司", "商务运营专员", "商务运营", "初级社招", "明确上海", "上海市虹口区", "毕业两年内初级岗位", "国际商务、工商运营", "2026-09-28", 76, "待审核"),
+)
+
+
+DEMO_VERIFICATION_CHECKS = json.dumps(
+    {
+        "source_checked": True,
+        "scope_checked": True,
+        "audience_checked": True,
+        "location_checked": True,
+        "application_checked": True,
+        "timeliness_checked": True,
+    },
+    ensure_ascii=False,
+    sort_keys=True,
 )
 
 
@@ -96,6 +111,10 @@ def seed_demo_data(session) -> SeedResult:
                     intake_reason="演示岗位：实习、校招或毕业两年内初级岗位",
                     intake_evidence="演示数据",
                     intake_confidence="高",
+                    student_fit_level="核心适配",
+                    distribution_recommendation="进入学生分发审核",
+                    verification_checks=DEMO_VERIFICATION_CHECKS,
+                    verification_version=1,
                 )
             )
             created_jobs += 1
@@ -106,6 +125,10 @@ def seed_demo_data(session) -> SeedResult:
                 job.intake_reason = "演示岗位：实习、校招或毕业两年内初级岗位"
                 job.intake_evidence = "演示数据"
                 job.intake_confidence = "高"
+            job.student_fit_level = "核心适配"
+            job.distribution_recommendation = "进入学生分发审核"
+            job.verification_checks = DEMO_VERIFICATION_CHECKS
+            job.verification_version = job.version
             job.version += 1
             job.updated_at = datetime.now()
             updated_jobs += 1
