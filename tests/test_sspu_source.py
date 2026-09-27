@@ -308,3 +308,17 @@ def test_empty_body_is_data_error_not_an_unsupported_skip():
     with pytest.raises(ValueError) as error:
         source.parse_sspu_details(payload(""), ANNOUNCEMENT)
     assert not isinstance(error.value, source.UnsupportedSspuAnnouncement)
+
+
+@pytest.mark.parametrize("later_job", [
+    labelled("北京高级工程师", "博士及以上，工作地点：北京。"),
+    "<p>岗位名称：北京高级工程师</p><p>博士及以上，工作地点：北京。</p>",
+    numbered(2, "高级工程师", "北京", "博士及以上。"),
+    "<p>2、高级工程师（1名）</p><p>博士及以上，工作地点：北京。</p>",
+])
+def test_later_job_after_benefits_is_unsupported_not_shared_qualifications(later_job):
+    source = adapter()
+    html = labelled("上海助理", "本科及以上，工作地点：上海。") + "<p>福利待遇</p><p>五险一金</p>" + later_job
+    with pytest.raises(source.UnsupportedSspuStructure) as error:
+        source.parse_sspu_details(payload(html), ANNOUNCEMENT)
+    assert error.value.reason_code == "LAYOUT_UNSUPPORTED"

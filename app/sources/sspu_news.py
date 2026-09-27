@@ -258,6 +258,11 @@ def parse_sspu_details(payload: object, announcement: CampusAnnouncement) -> lis
     # Keep explicit access/audience restrictions; never infer them from a parent title.
     restrictions = _common_constraints(prefix)
     common = paragraphs[tail_start:]
+    for index, (text, _) in enumerate(common):
+        numbered = _NUMBERED.fullmatch(text)
+        next_location = _pay_location(common[index + 1][0]) if index + 1 < len(common) else None
+        if _LABELLED.fullmatch(text) or (numbered and (next_location is not None or _HEADCOUNT.search(text))):
+            raise UnsupportedSspuStructure("二工大共同待遇之后出现其他岗位，无法可靠区分共同条件")
     common_text = "\n".join(_evidence_line(text) for text, _ in common)
     employer_name = _employer(data, prefix, announcement)
     details, seen = [], set()
