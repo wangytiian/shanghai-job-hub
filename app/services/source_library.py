@@ -36,6 +36,8 @@ def can_auto_collect(source: Source) -> bool:
 
 def monitoring_message(source: Source) -> str:
     if source.library_tier == "A":
+        if source.source_key == "sspu-news":
+            return "已批准自动采集，持续观察；岗位仍须逐条人工核验。"
         return "已验证来源：采集结果仍须人工核验。"
     if source.library_tier == "B":
         return "待专用适配：不参与每日采集。"

@@ -9,7 +9,7 @@ from bs4 import BeautifulSoup
 from app.models import Source, SourceDiagnostic
 
 
-KNOWN_ADAPTERS = {"shanghai_sasac", "official_dated_list", "spdb_shanghai_jobs", "boc_announcements"}
+KNOWN_ADAPTERS = {"shanghai_sasac", "official_dated_list", "spdb_shanghai_jobs", "boc_announcements", "sspu_news"}
 RECRUITMENT_WORDS = ("招聘公告", "校园招聘", "社会招聘", "实习生招聘", "招聘信息", "职位空缺")
 
 

@@ -4,14 +4,14 @@ from app.sources.catalog import OFFICIAL_SOURCE_CATALOG, ensure_official_source_
 from app.services.source_library import summarize_source_library
 
 
-def test_official_source_catalog_creates_eighty_sources_with_only_public_adapters_enabled():
+def test_official_source_catalog_creates_eighty_two_sources_with_only_public_adapters_enabled():
     session_factory = create_database("sqlite+pysqlite:///:memory:")
     with session_factory() as session:
         ensure_official_source_catalog(session)
         sources = {source.name: source for source in session.query(Source).all()}
 
-    assert len(OFFICIAL_SOURCE_CATALOG) == 81
-    assert len(sources) == 81
+    assert len(OFFICIAL_SOURCE_CATALOG) == 82
+    assert len(sources) == 82
     enabled = [source for source in sources.values() if source.is_enabled]
     assert {source.name for source in enabled} == {
         "上海市国资委国企招聘（真实公开来源）",
@@ -21,6 +21,7 @@ def test_official_source_catalog_creates_eighty_sources_with_only_public_adapter
         "上海浦东发展银行官方招聘",
         "中国银行官方招聘",
         "上海商学院就业网（待专用适配）",
+        "上海第二工业大学就业网",
     }
     assert sources["中信银行官方招聘（待专用适配）"].is_enabled is False
     assert sources["中信银行官方招聘（待专用适配）"].adapter_key == "pending_validation"
@@ -116,22 +117,22 @@ def test_source_library_stats_separate_catalog_demo_and_schedulable_sources():
 
         stats = summarize_source_library(session.query(Source).all(), OFFICIAL_SOURCE_CATALOG)
 
-    assert stats.catalog_sources == 81
+    assert stats.catalog_sources == 82
     assert stats.demo_sources == 1
-    assert stats.schedulable_sources == 6
+    assert stats.schedulable_sources == 7
 
 
-def test_v2_catalog_has_eighty_one_unique_sources_with_seven_auto_collectors():
+def test_v2_catalog_has_eighty_two_unique_sources_with_eight_auto_collectors():
     session_factory = create_database("sqlite+pysqlite:///:memory:")
     with session_factory() as session:
         ensure_official_source_catalog(session)
         sources = session.query(Source).all()
 
-    assert len(OFFICIAL_SOURCE_CATALOG) == 81
-    assert len({source.name for source in OFFICIAL_SOURCE_CATALOG}) == 81
-    assert len(sources) == 81
+    assert len(OFFICIAL_SOURCE_CATALOG) == 82
+    assert len({source.name for source in OFFICIAL_SOURCE_CATALOG}) == 82
+    assert len(sources) == 82
     assert {source.library_tier for source in sources} == {"A", "B", "C", "D"}
-    assert len([source for source in sources if source.library_tier == "A" and source.is_enabled]) == 7
+    assert len([source for source in sources if source.library_tier == "A" and source.is_enabled]) == 8
     assert all(not source.is_enabled for source in sources if source.library_tier != "A")
     source_by_name = {source.name: source for source in sources}
     assert {source.name for source in sources if source.library_tier == "B"} >= {
@@ -182,7 +183,7 @@ def test_catalog_migrates_legacy_citi_record_without_creating_a_duplicate():
         ensure_official_source_catalog(session)
         sources = session.query(Source).all()
 
-    assert len(sources) == 81
+    assert len(sources) == 82
     assert [source.name for source in sources].count("花旗官方招聘（重点监控）") == 1
     assert "花旗官方招聘（待专用适配）" not in {source.name for source in sources}
 

@@ -3,16 +3,17 @@ from collections import Counter
 from datetime import datetime
 from hashlib import sha256
 import json
+import re
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Job, Source, TaskRun
+from app.models import Job, Source, SourceDiagnostic, TaskRun
 from app.services.intake_screening import screen_intake, screen_intake_with_ai
 from app.services.deadline_policy import extract_application_deadline, mark_job_expired
 from app.services.collection_strategy import build_collection_plan
 from app.services.source_library import can_auto_collect
-from app.services.source_candidate_policy import candidate_from_detail, evaluate_candidate
+from app.services.source_candidate_policy import CandidateDecision, candidate_from_detail, evaluate_candidate
 from app.services.review_intake import REVIEW_NOTE, evaluate_review_intake
 from app.services.source_request_budget import RequestBudgetController
 from app.sources.catalog import ensure_official_source_catalog
@@ -32,6 +33,11 @@ from app.sources.campus_json import (
     fetch_campus_details,
 )
 from app.sources.sbs_jobs import fetch_sbs_detail, fetch_sbs_listings
+from app.sources.sspu_news import (
+    UnsupportedSspuAnnouncement,
+    fetch_sspu_announcements,
+    fetch_sspu_details,
+)
 
 
 REAL_SOURCE_NAME = "上海市国资委国企招聘（真实公开来源）"
@@ -41,6 +47,7 @@ NCSS_SOURCE_NAME = "国家大学生就业服务平台上海岗位"
 SJTU_SOURCE_NAME = "上海交通大学就业网（待专用适配）"
 SUFE_SOURCE_NAME = "上海财经大学就业网（待专用适配）"
 SBS_SOURCE_NAME = "上海商学院就业网（待专用适配）"
+SSPU_SOURCE_NAME = "上海第二工业大学就业网"
 REAL_RISK_FLAG = "真实线索：尚未人工核验，不得对外发布"
 
 
@@ -138,7 +145,7 @@ def _save_detail(
     detail,
     collected_now: datetime,
     intake_ai_complete=None,
-    *, review_note: str = "",
+    *, review_note: str = "", fingerprint_context: str = "",
 ) -> str:
     identity_key = str(getattr(detail, "identity_key", "") or "").strip()
     if not identity_key:
@@ -156,7 +163,10 @@ def _save_detail(
     evidence_status, evidence_note = _evidence_status(detail)
     if review_note:
         evidence_note = " ".join(filter(None, (evidence_note, review_note)))
-    content_fingerprint = _content_fingerprint(f"{detail.evidence_text}\n{attachment_links}")
+    content_material = f"{detail.evidence_text}\n{attachment_links}"
+    if fingerprint_context:
+        content_material += "\n" + fingerprint_context
+    content_fingerprint = _content_fingerprint(content_material)
     if job is None:
         intake = (
             screen_intake_with_ai(detail.title, detail.evidence_text, intake_ai_complete)
@@ -314,6 +324,8 @@ def collect_due_sources(
                 )
             elif source.adapter_key == "sbs_jobs":
                 result = collect_sbs_jobs(session, client, now=collected_now, intake_ai_complete=intake_ai_complete)
+            elif source.adapter_key == "sspu_news":
+                result = collect_sspu_jobs(session, client, now=collected_now, intake_ai_complete=intake_ai_complete)
             else:
                 skipped += 1
                 continue
@@ -585,6 +597,169 @@ def collect_sbs_jobs(session: Session, client, pages: int = 3, now: datetime | N
         session.add(TaskRun(task_name=f"公开采集·{source.name}", status="部分完成" if failed_jobs else "完成", message=summary))
         session.commit()
         return RealCollectionResult(created_jobs, updated_jobs, failed_jobs, unchanged_jobs, source.status)
+    except Exception as exc:
+        _record_source_failure(source, exc)
+        session.add(TaskRun(task_name=f"公开采集·{source.name}", status="失败", message=f"采集失败：{str(exc)[:300]}"))
+        session.commit()
+        raise
+
+
+def _sspu_exclusion(detail) -> str:
+    """Extra source-local safeguards for the undergraduate, cross-school audience."""
+    text = f"{detail.title}\n{detail.evidence_text}"
+    if re.search(r"(?:仅限|只限|仅面向|只面向|只接受|仅接受|只招|仅招|(?<!不)限)\s*(?:上海第二工业大学|二工大|本校)", text):
+        return "SCHOOL_EXCLUSIVE"
+    degree_requirement = r"(?:任职要求|学历要求|学历|教育背景|学历背景)\s*[：:]?\s*(?:全日制)?(?:硕士|博士)(?:研究生)?(?:及以上|以上|学历|学位|\s*(?=[，,；;。\n]|$))"
+    degree_metadata = r"[/／]\s*(?:全日制)?(?:硕士|博士)(?:研究生)?(?:及以上|以上)?\s*(?=\n|$)"
+    if re.search(degree_requirement, text) or re.search(degree_metadata, text):
+        return "POSTGRADUATE_ONLY"
+    return ""
+
+
+def _sspu_student_evidence(detail) -> bool:
+    """Experience with interns or HR campus duties do not prove eligibility."""
+    if "实习" in detail.title:
+        return True
+    in_requirements = False
+    for line in detail.evidence_text.splitlines():
+        if re.search(r"岗位职责|工作职责|工作内容|职位描述", line):
+            in_requirements = False
+            continue
+        if re.search(r"岗位要求|任职要求|任职条件|任职资格|教育背景|学历背景|招聘对象|申请条件", line):
+            in_requirements = True
+        if re.search(r"^实习(?:待遇|补贴)|(?:入职|参加|接受|开始)实习", line):
+            return True
+        if in_requirements and re.search(r"应届|在校生|在校学生|毕业两年内|20\d{2}\s*届|校招任职要求|(?:招收|招聘|面向|接受)\s*实习生", line):
+            return True
+    return False
+
+
+def _save_sspu_detail(session, source, detail, collected_now, *, review_note="") -> str:
+    context = {key: getattr(detail, key, "") for key in (
+        "title", "announcement_title", "employer_name", "location_category", "location_detail",
+        "published_at", "detail_url", "official_url", "recruitment_type",
+    )}
+    context["review_note"] = review_note
+    return _save_detail(session, source, detail, collected_now, review_note=review_note,
+                        fingerprint_context=json.dumps(context, ensure_ascii=False, sort_keys=True))
+
+
+def _refresh_sspu_fields(job: Job, detail) -> None:
+    """Keep displayed facts in sync with the newly extracted per-role evidence."""
+    candidate = candidate_from_detail(detail)
+    job.announcement_title = detail.announcement_title
+    job.job_title = detail.title
+    job.source_url = detail.detail_url
+    job.location_category = detail.location_category
+    job.location_detail = detail.location_detail
+    job.recruitment_type = detail.recruitment_type
+    job.deadline = candidate.deadline or "原文待人工确认"
+    job.application_method = "email" if candidate.application_kind == "email" else "official_page"
+    job.application_contact = candidate.application_value if candidate.application_kind == "email" else ""
+
+
+def collect_sspu_jobs(
+    session: Session, client, pages: int = 3, now: datetime | None = None, intake_ai_complete=None,
+) -> RealCollectionResult:
+    """Collect the explicitly approved A source without promoting individual jobs."""
+    collected_now = now or datetime.now()
+    ensure_official_source_catalog(session)
+    source = session.scalar(select(Source).where(Source.source_key == "sspu-news"))
+    if source is None or not can_auto_collect(source) or source.status == "暂停":
+        raise ValueError("二工大来源未启用自动采集或已暂停")
+    source.last_checked_at = collected_now
+    counts: Counter = Counter()
+    reasons: Counter = Counter()
+    errors: Counter = Counter()
+    controller = RequestBudgetController(total_seconds=180, request_timeout_seconds=12, interval_seconds=1)
+    try:
+        announcements = fetch_sspu_announcements(client, pages=pages, controller=controller)
+        if not announcements:
+            raise ValueError("二工大公开列表为空，未将其视为没有新招聘")
+        for announcement in announcements:
+            try:
+                details = fetch_sspu_details(client, announcement, controller=controller)
+                if not details:
+                    raise ValueError("二工大详情未提取到可核验岗位")
+                counts["successful_details"] += 1
+                counts["parsed_jobs"] += len(details)
+                for detail in details:
+                    candidate = candidate_from_detail(detail, source_listing_url=source.url)
+                    decision = evaluate_review_intake(candidate, now=collected_now)
+                    if decision.verdict == "qualified" and not _sspu_student_evidence(detail):
+                        decision = CandidateDecision("review_only", ("TARGET_AUDIENCE_UNCLEAR",))
+                    local_exclusion = _sspu_exclusion(detail)
+                    fingerprint = f"{source.name}|{detail.identity_key}"
+                    if local_exclusion or decision.verdict not in {"qualified", "review_only"}:
+                        counts["skipped"] += 1
+                        reason_codes = (local_exclusion,) if local_exclusion else decision.reason_codes
+                        reasons.update(reason_codes)
+                        # A previously accepted role can become ineligible. Preserve its
+                        # history, but do not leave an old approval active after a change.
+                        existing = session.scalar(select(Job).where(Job.fingerprint == fingerprint))
+                        if existing is not None:
+                            outcome = _save_sspu_detail(session, source, detail, collected_now)
+                            if outcome == "expired":
+                                existing.verification_checks = "{}"
+                                existing.verification_version = 0
+                                counts["expired"] += 1
+                            else:
+                                _refresh_sspu_fields(existing, detail)
+                                if existing.intake_grade != "D" or outcome == "updated":
+                                    if outcome != "updated":
+                                        existing.version += 1
+                                    existing.status = "待核验"
+                                    existing.intake_grade = "D"
+                                    existing.intake_route = "过滤留档"
+                                    existing.intake_reason = "来源复查不再符合入库条件：" + ", ".join(reason_codes)
+                                    existing.verification_checks = "{}"
+                                    existing.verification_version = 0
+                                    existing.risk_flags = REAL_RISK_FLAG
+                                    counts["updated"] += 1
+                        continue
+                    review_note = REVIEW_NOTE if decision.verdict == "review_only" else ""
+                    outcome = _save_sspu_detail(session, source, detail, collected_now, review_note=review_note)
+                    counts[outcome] += 1
+                    if outcome in {"created", "updated"}:
+                        job = session.scalar(select(Job).where(Job.fingerprint == fingerprint))
+                        _refresh_sspu_fields(job, detail)
+                        if not review_note:
+                            intake = screen_intake(detail.title, detail.evidence_text)
+                            job.intake_grade, job.intake_route = intake.grade, intake.route
+                            job.intake_reason, job.intake_evidence = intake.reason, intake.evidence
+                            job.intake_confidence = intake.confidence
+                        if review_note:
+                            counts["review"] += 1
+            except UnsupportedSspuAnnouncement as exc:
+                counts["unsupported"] += 1
+                reasons.update([getattr(exc, "reason_code", "EXTERNAL_LINK_UNSUPPORTED")])
+            except Exception as exc:
+                counts["failed"] += 1
+                errors.update([type(exc).__name__])
+        if not counts["successful_details"]:
+            raise ValueError("二工大列表可读，但全部详情未完成岗位解析；" + ", ".join(errors or reasons))
+        _record_source_success(source, collected_now)
+        summary = (
+            f"二工大：公告 {len(announcements)} 篇，正文成功 {counts['successful_details']} 篇，解析岗位 {counts['parsed_jobs']} 条；"
+            f"新增 {counts['created']} 条，无变化 {counts['unchanged']} 条，有更新 {counts['updated']} 条，"
+            f"其中受众待确认 {counts['review']} 条；规则跳过 {counts['skipped']} 条，未适配公告跳过 {counts['unsupported']} 篇，"
+            f"已入库转截止 {counts['expired']} 条，请求或处理失败 {counts['failed']} 条。"
+        )
+        if reasons:
+            summary += " 过滤原因：" + ", ".join(f"{key}={value}" for key, value in reasons.items())
+        if errors:
+            source.last_error_summary = "部分详情失败：" + ", ".join(f"{key}={value}" for key, value in errors.items())
+            summary += " " + source.last_error_summary
+        source.last_monitor_summary = summary
+        session.add(SourceDiagnostic(
+            source_id=source.id, checked_at=collected_now, depth="detail",
+            connection_status="ok", content_status="detail_verified", adapter_status="available",
+            http_status=200, final_url=source.url, sample_count=len(announcements),
+            detail_success_count=counts["successful_details"], message=summary,
+        ))
+        session.add(TaskRun(task_name=f"公开采集·{source.name}", status="部分完成" if counts["failed"] else "完成", message=summary))
+        session.commit()
+        return RealCollectionResult(counts["created"], counts["updated"], counts["failed"], counts["unchanged"], source.status)
     except Exception as exc:
         _record_source_failure(source, exc)
         session.add(TaskRun(task_name=f"公开采集·{source.name}", status="失败", message=f"采集失败：{str(exc)[:300]}"))

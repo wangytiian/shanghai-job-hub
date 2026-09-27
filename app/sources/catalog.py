@@ -64,6 +64,16 @@ OFFICIAL_SOURCE_CATALOG = (
         source_type="高校就业平台",
         source_key="sbs-jobs",
     ),
+    _source(
+        "上海第二工业大学就业网",
+        "https://career.sspu.edu.cn/career/news/zpgg",
+        "上海学生就业",
+        "A",
+        86,
+        adapter_key="sspu_news",
+        source_type="高校就业平台",
+        source_key="sspu-news",
+    ),
     # B: core sites awaiting a dedicated public-page adapter
     _source(
         "华东理工大学就业网（待专用适配）",
@@ -221,6 +231,12 @@ _LEGACY_SOURCE_RENAMES = {
 
 
 _A_TRIAL_DEFAULTS = {
+    "sspu-news": {
+        "adaptation_status": "已自动采集",
+        "next_action": "用户批准A类；按季节定时采集，持续观察并人工核验",
+        "validation_state": "用户批准A类（持续观察）",
+        "check_frequency_hours": 8,
+    },
     "sbs-jobs": {
         "adaptation_status": "A类试运行（自动采集，人工核验）",
         "next_action": "每8小时采集；连续7天观察并人工核验",

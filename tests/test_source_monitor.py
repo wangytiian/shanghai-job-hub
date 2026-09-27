@@ -59,8 +59,8 @@ def test_sources_page_shows_v2_library_tiers_and_safe_boundaries():
 
     assert response.status_code == 200
     for label in (
-        "81 家分层来源库",
-        "已验证自动抓取",
+        "82 家分层来源库",
+        "自动采集来源",
         "核心专用适配库",
         "重点监控库",
         "观察库",
@@ -76,22 +76,40 @@ def test_sources_page_shows_v2_library_tiers_and_safe_boundaries():
 def test_sources_page_uses_actual_a_tier_count_not_a_hardcoded_number():
     response = TestClient(create_app("sqlite+pysqlite:///:memory:")).get("/sources")
 
-    assert "目前只有 A 类 7 家已验证官方来源参与每日采集" in response.text
-    assert "目前只有 A 类 6 家已验证官方来源参与每日采集" not in response.text
+    assert "仅启用且未暂停的 A 类来源参与每日采集" in response.text
+    assert "目前只有 A 类 8 家已验证官方来源参与每日采集" not in response.text
 
 
 def test_sources_page_separates_catalog_demo_and_schedulable_counts():
     response = TestClient(create_app("sqlite+pysqlite:///:memory:")).get("/sources")
 
-    assert "官方目录来源 81 家" in response.text
+    assert "官方目录来源 82 家" in response.text
     assert "演示来源 8 家" in response.text
-    assert "当前可调度 7 家" in response.text
+    assert "当前可调度 8 家" in response.text
 
 
 def test_sources_page_places_enabled_a_tier_sources_before_disabled_sources():
     response = TestClient(create_app("sqlite+pysqlite:///:memory:")).get("/sources")
 
     assert response.text.index("上海商学院就业网") < response.text.index("国家大学生就业服务平台上海岗位")
+
+
+def test_sspu_source_shows_enabled_collection_and_real_summary():
+    from bs4 import BeautifulSoup
+
+    app = create_app("sqlite+pysqlite:///:memory:")
+    with app.state.session_factory() as session:
+        source = session.query(Source).filter_by(source_key="sspu-news").one()
+        source.last_monitor_summary = "二工大公开采集：新增 3 条，全部待人工核验。"
+        session.commit()
+    response = TestClient(app).get("/sources")
+    row = next(row for row in BeautifulSoup(response.text, "html.parser").select("tbody tr")
+               if "上海第二工业大学就业网" in row.get_text())
+    assert "自动采集已启用" in row.get_text()
+    assert "新增 3 条" in row.get_text()
+    assert "建议运行" not in row.get_text()
+    assert "已验证来源" not in row.get_text()
+    assert response.text.index("上海第二工业大学就业网") < response.text.index("国家大学生就业服务平台上海岗位")
 
 
 def test_source_health_check_route_returns_feedback_on_sources_page(monkeypatch):
