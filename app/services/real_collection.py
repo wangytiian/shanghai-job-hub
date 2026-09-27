@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from collections import Counter
 from datetime import datetime
 from hashlib import sha256
 import json
@@ -12,6 +13,8 @@ from app.services.deadline_policy import extract_application_deadline, mark_job_
 from app.services.collection_strategy import build_collection_plan
 from app.services.source_library import can_auto_collect
 from app.services.source_candidate_policy import candidate_from_detail, evaluate_candidate
+from app.services.review_intake import REVIEW_NOTE, evaluate_review_intake
+from app.services.source_request_budget import RequestBudgetController
 from app.sources.catalog import ensure_official_source_catalog
 from app.sources.official_list import fetch_official_detail, fetch_official_listings
 from app.sources.shanghai_sasac import (
@@ -135,6 +138,7 @@ def _save_detail(
     detail,
     collected_now: datetime,
     intake_ai_complete=None,
+    *, review_note: str = "",
 ) -> str:
     identity_key = str(getattr(detail, "identity_key", "") or "").strip()
     if not identity_key:
@@ -150,11 +154,13 @@ def _save_detail(
         return "expired"
     attachment_links = _attachment_links(detail)
     evidence_status, evidence_note = _evidence_status(detail)
+    if review_note:
+        evidence_note = " ".join(filter(None, (evidence_note, review_note)))
     content_fingerprint = _content_fingerprint(f"{detail.evidence_text}\n{attachment_links}")
     if job is None:
         intake = (
             screen_intake_with_ai(detail.title, detail.evidence_text, intake_ai_complete)
-            if intake_ai_complete is not None
+            if intake_ai_complete is not None and not review_note
             else screen_intake(detail.title, detail.evidence_text)
         )
         session.add(
@@ -188,9 +194,9 @@ def _save_detail(
                 lifecycle_status="正常",
                 last_change_summary="",
                 status="待核验",
-                intake_grade=intake.grade,
-                intake_route=intake.route,
-                intake_reason=intake.reason,
+                intake_grade="C" if review_note else intake.grade,
+                intake_route="人工复核" if review_note else intake.route,
+                intake_reason=review_note or intake.reason,
                 intake_evidence=intake.evidence,
                 intake_confidence=intake.confidence,
             )
@@ -215,6 +221,11 @@ def _save_detail(
     job.risk_flags = REAL_RISK_FLAG
     job.verification_checks = "{}"
     job.verification_version = 0
+    if review_note:
+        job.intake_grade = "C"
+        job.intake_route = "人工复核"
+        job.intake_reason = review_note
+        job.intake_confidence = "低"
     job.version += 1
     return "updated"
 
@@ -313,7 +324,8 @@ def collect_due_sources(
             failed += result.failed_jobs
         except Exception:
             failed += 1
-    session.add(TaskRun(task_name="每日多来源采集", status="完成" if successful else "失败", message=f"尝试 {attempted} 个来源，成功 {successful} 个，跳过 {skipped} 个；新增 {created} 条，无变化 {unchanged} 条，有更新 {updated} 条，失败 {failed} 项。"))
+    task_status = "无到期任务" if not attempted else "失败" if not successful else "部分完成" if failed or successful < attempted else "完成"
+    session.add(TaskRun(task_name="每日多来源采集", status=task_status, message=f"尝试 {attempted} 个来源，成功 {successful} 个，跳过 {skipped} 个；新增 {created} 条，无变化 {unchanged} 条，有更新 {updated} 条，失败 {failed} 项。"))
     session.commit()
     return DailyCollectionResult(attempted, successful, skipped, created, updated, unchanged, failed)
 
@@ -522,41 +534,55 @@ def collect_sufe_job_announcements(
 
 
 def collect_sbs_jobs(session: Session, client, pages: int = 3, now: datetime | None = None, intake_ai_complete=None) -> RealCollectionResult:
-    """Collect verified Shanghai Business School public positions into review."""
+    """Collect SBS positions, retaining audience-only uncertainty for manual review."""
     collected_now = now or datetime.now()
     ensure_official_source_catalog(session)
     source = session.scalar(select(Source).where(Source.name == SBS_SOURCE_NAME))
     if source is None:
         raise ValueError("上海商学院就业网来源未配置")
     source.last_checked_at = collected_now
-    created_jobs = updated_jobs = failed_jobs = unchanged_jobs = non_shanghai_jobs = 0
+    created_jobs = updated_jobs = failed_jobs = unchanged_jobs = review_jobs = skipped_jobs = 0
+    reasons: Counter = Counter()
+    errors: Counter = Counter()
     successful_details = 0
+    controller = RequestBudgetController(total_seconds=180, request_timeout_seconds=12, interval_seconds=1)
     try:
-        listings = fetch_sbs_listings(client, pages=pages)
+        listings = fetch_sbs_listings(client, pages=pages, controller=controller)
         if not listings:
             raise ValueError("上海商学院就业网公开列表为空，未将其视为没有新招聘")
         for listing in listings:
             try:
-                detail = fetch_sbs_detail(client, listing)
+                detail = fetch_sbs_detail(client, listing, controller=controller)
                 successful_details += 1
-                decision = evaluate_candidate(candidate_from_detail(detail, source_listing_url=source.url), now=collected_now)
-                if "LOCATION_NOT_SHANGHAI" in decision.reason_codes:
-                    non_shanghai_jobs += 1
+                decision = evaluate_review_intake(candidate_from_detail(detail, source_listing_url=source.url), now=collected_now)
+                if decision.verdict not in {"qualified", "review_only"}:
+                    skipped_jobs += 1
+                    reasons.update(decision.reason_codes)
                     continue
-                if decision.verdict != "qualified":
-                    failed_jobs += 1
-                    continue
-                outcome = _save_detail(session, source, detail, collected_now, intake_ai_complete)
+                review_note = REVIEW_NOTE if decision.verdict == "review_only" else ""
+                outcome = _save_detail(session, source, detail, collected_now, intake_ai_complete, review_note=review_note)
                 if outcome == "created": created_jobs += 1
                 elif outcome == "updated": updated_jobs += 1
-                else: unchanged_jobs += 1
-            except Exception:
+                elif outcome == "unchanged": unchanged_jobs += 1
+                else:
+                    skipped_jobs += 1
+                    reasons.update(["APPLICATION_EXPIRED"])
+                if review_note and outcome in {"created", "updated"}:
+                    review_jobs += 1
+            except Exception as exc:
                 failed_jobs += 1
+                errors.update([type(exc).__name__])
         if successful_details == 0:
             raise ValueError("上海商学院就业网列表可读，但全部详情解析失败")
         _record_source_success(source, collected_now)
-        source.last_monitor_summary = f"上海商学院就业网采集：新增 {created_jobs} 条，无变化 {unchanged_jobs} 条，有更新 {updated_jobs} 条，非上海 {non_shanghai_jobs} 条，详情跳过或失败 {failed_jobs} 条。"
-        session.add(TaskRun(task_name=f"公开采集·{source.name}", status="完成", message=source.last_monitor_summary))
+        summary = f"上海商学院就业网：列表 {len(listings)} 条，详情成功 {successful_details} 条；新增 {created_jobs} 条，无变化 {unchanged_jobs} 条，有更新 {updated_jobs} 条，其中受众待确认 {review_jobs} 条；规则跳过 {skipped_jobs} 条，请求或处理失败 {failed_jobs} 条。"
+        if reasons:
+            summary += " 过滤原因：" + ", ".join(f"{key}={value}" for key, value in reasons.items())
+        if errors:
+            summary += " 错误类型：" + ", ".join(f"{key}={value}" for key, value in errors.items())
+            source.last_error_summary = f"部分详情失败 {failed_jobs}/{len(listings)}：" + ", ".join(errors)
+        source.last_monitor_summary = summary
+        session.add(TaskRun(task_name=f"公开采集·{source.name}", status="部分完成" if failed_jobs else "完成", message=summary))
         session.commit()
         return RealCollectionResult(created_jobs, updated_jobs, failed_jobs, unchanged_jobs, source.status)
     except Exception as exc:
@@ -613,6 +639,7 @@ def collect_shanghai_sasac(
     unchanged_jobs = 0
     updated_jobs = 0
     failed_jobs = 0
+    failure_samples: list[str] = []
     try:
         listings = fetch_shanghai_sasac_listings(client, limit=limit)
         if not listings:
@@ -690,14 +717,22 @@ def collect_shanghai_sasac(
                     job.verification_version = 0
                     job.version += 1
                     updated_jobs += 1
-            except Exception:
+            except Exception as exc:
                 failed_jobs += 1
+                if len(failure_samples) < 3:
+                    failure_samples.append(f"{getattr(listing, 'detail_url', '')} {type(exc).__name__}: {str(exc)[:120]}")
+        if failed_jobs == len(listings):
+            raise ValueError("来源列表可读，但全部详情解析失败；" + "；".join(failure_samples))
         _record_source_success(source, collected_now)
         message = (
             f"上海市国资委真实公开来源：新增 {created_jobs} 条，无变化 {unchanged_jobs} 条，"
             f"有更新 {updated_jobs} 条，单条失败 {failed_jobs} 条。"
         )
-        session.add(TaskRun(task_name="上海市国资委公开采集", status="完成", message=message))
+        if failed_jobs:
+            source.last_error_summary = f"部分详情失败 {failed_jobs}/{len(listings)}；" + "；".join(failure_samples)
+            message += " 部分详情未完成：" + "；".join(failure_samples)
+        source.last_monitor_summary = message
+        session.add(TaskRun(task_name="上海市国资委公开采集", status="部分完成" if failed_jobs else "完成", message=message))
         session.commit()
         return RealCollectionResult(
             created_jobs=created_jobs,

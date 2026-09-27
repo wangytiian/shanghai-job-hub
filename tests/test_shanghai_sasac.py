@@ -42,3 +42,10 @@ def test_prefers_article_body_and_excludes_navigation_and_footer():
     assert "面向2027届学生" in detail.evidence_text
     assert "首页 信息公开" not in detail.evidence_text
     assert "版权所有" not in detail.evidence_text
+
+
+def test_image_only_notice_is_explained_but_never_counted_as_extracted_body():
+    listing = ShanghaiSasacListing("校招", "2026-09-26", "https://www.gzw.sh.gov.cn/a")
+    html = '<main><h1>校招</h1><img src="/poster.jpg"></main>'
+    with pytest.raises(ValueError, match="图片.*人工"):
+        parse_detail_html(html, listing)

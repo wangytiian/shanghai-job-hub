@@ -100,15 +100,15 @@ def _post_json(client, url: str, data: dict) -> dict:
     response = client.post(
         url,
         data=data,
-        headers={"User-Agent": USER_AGENT},
+        headers={"User-Agent": USER_AGENT, "Referer": f"{BASE_URL}socialJob"},
         timeout=12.0,
     )
     response.raise_for_status()
     return response.json()
 
 
-def _get_json(client, url: str) -> dict:
-    response = client.get(url, headers={"User-Agent": USER_AGENT}, timeout=12.0)
+def _get_json(client, url: str, *, referer: str) -> dict:
+    response = client.get(url, headers={"User-Agent": USER_AGENT, "Referer": referer}, timeout=12.0)
     response.raise_for_status()
     return response.json()
 
@@ -126,7 +126,11 @@ def fetch_spdb_shanghai_job_details(
     details: list[SpdbDetail] = []
     filter_reasons: list[str] = []
     for listing in parse_spdb_shanghai_listings(payload, today=today)[:limit]:
-        detail_payload = _get_json(client, f"{BASE_URL}jobDetailJSON?jobId={listing.job_id}&type=1")
+        detail_payload = _get_json(
+            client,
+            f"{BASE_URL}jobDetailJSON?jobId={listing.job_id}&type=1",
+            referer=listing.detail_url,
+        )
         job = detail_payload.get("cgOpenningJob") or {}
         duty = str(job.get("hrsJobDuty", "")).strip()
         requirement = str(job.get("hrsJobRequire", "")).strip()

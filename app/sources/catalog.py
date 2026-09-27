@@ -220,7 +220,7 @@ _LEGACY_SOURCE_RENAMES = {
 }
 
 
-_A_TRIAL_PROMOTIONS = {
+_A_TRIAL_DEFAULTS = {
     "sbs-jobs": {
         "adaptation_status": "A类试运行（自动采集，人工核验）",
         "next_action": "每8小时采集；连续7天观察并人工核验",
@@ -249,18 +249,9 @@ def ensure_official_source_catalog(session: Session) -> None:
         source = session.scalar(select(Source).where(Source.name == definition.name))
         values = definition.__dict__ | {"official_career_url": definition.url}
         if source is None:
-            session.add(Source(**values, status="正常", check_frequency_hours=4))
+            values |= {"status": "正常", "check_frequency_hours": 4}
+            values |= _A_TRIAL_DEFAULTS.get(definition.source_key, {})
+            session.add(Source(**values))
         elif not source.source_key:
             source.source_key = definition.source_key
-    for source_key, promotion in _A_TRIAL_PROMOTIONS.items():
-        source = session.scalar(select(Source).where(Source.source_key == source_key))
-        if source is None:
-            continue
-        source.library_tier = "A"
-        source.adaptation_status = promotion["adaptation_status"]
-        source.next_action = promotion["next_action"]
-        source.validation_state = promotion["validation_state"]
-        source.check_frequency_hours = promotion["check_frequency_hours"]
-        if source.status != "暂停":
-            source.is_enabled = True
     session.commit()

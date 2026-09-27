@@ -7,7 +7,7 @@ from urllib.parse import urljoin
 import httpx
 from bs4 import BeautifulSoup
 
-from app.sources.content_extraction import extract_article_text
+from app.sources.content_extraction import CONTENT_SELECTORS, extract_article_text
 
 
 LISTING_URL = "https://www.gzw.sh.gov.cn/shgzw_xxgk_cqzp/"
@@ -66,6 +66,9 @@ def parse_detail_html(html: str, listing: ShanghaiSasacListing) -> ShanghaiSasac
     published_at = date_match.group(0) if date_match else listing.published_at
     body_text = page_text
     if len(body_text) < 20:
+        content_root = next((soup.select_one(selector) for selector in CONTENT_SELECTORS if soup.select_one(selector) is not None), soup.body or soup)
+        if content_root.select("img[src]"):
+            raise ValueError("公告正文以图片为主，需人工提取核验，未计为有效岗位")
         raise ValueError("公告详情页未提取到可保存的正文")
     evidence_text = body_text
     return ShanghaiSasacDetail(

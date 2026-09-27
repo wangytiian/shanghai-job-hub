@@ -40,3 +40,19 @@ def test_fetch_sbs_detail_uses_the_listing_detail_url():
     listing = parse_sbs_listings(_fixture("list-page-1.html"))[0]; client = Client()
     assert fetch_sbs_detail(client, listing).identity_key == "1001"
     assert client.calls == [(listing.detail_url, {"headers": {"User-Agent": "LixinRecruitingLocal/0.1 (public-information-research; local-only)"}, "timeout": 12.0})]
+
+def test_sbs_preserves_actual_description_label_even_without_keywords_in_body():
+    from app.services.source_candidate_policy import candidate_from_detail, evaluate_candidate
+    from datetime import datetime
+    html = _fixture("detail-shanghai.html").replace("岗位职责：", "").replace("任职要求：", "")
+    detail = parse_sbs_detail(html, parse_sbs_listings(_fixture("list-page-1.html"))[0])
+    assert "职位描述：协助财务分析" in detail.evidence_text
+    assert evaluate_candidate(candidate_from_detail(detail), now=datetime(2026, 9, 26)).verdict == "qualified"
+
+
+def test_sbs_does_not_treat_a_description_label_with_empty_or_tiny_content_as_evidence():
+    import pytest
+    listing = parse_sbs_listings(_fixture("list-page-1.html"))[0]
+    for content in ("", "欢迎应届生"):
+        with pytest.raises(ValueError, match="职位描述"):
+            parse_sbs_detail(f"<table><tr><td>职位描述：</td><td>{content}</td></tr></table>", listing)

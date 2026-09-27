@@ -20,17 +20,17 @@ def summarize_source_library(sources: Iterable[Source], catalog) -> SourceLibrar
         catalog_sources=sum(source.name in catalog_names for source in source_list),
         demo_sources=sum(source.name.endswith("（演示）") for source in source_list),
         schedulable_sources=sum(
-            source.is_enabled and source.status != "暂停" for source in source_list
+            can_auto_collect(source) and source.status != "暂停" for source in source_list
         ),
     )
 
 
 def can_auto_collect(source: Source) -> bool:
-    """Only fully verified A-tier sources may enter the job collection task."""
+    """Allow enabled A-tier collectors in verified or approved automatic trial states."""
     return (
         source.library_tier == "A"
         and source.is_enabled
-        and source.adaptation_status == "已自动采集"
+        and source.adaptation_status in {"已自动采集", "A类试运行（自动采集，人工核验）"}
     )
 
 

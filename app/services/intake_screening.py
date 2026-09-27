@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import json
+import re
 from typing import Callable
 
 
@@ -12,18 +13,21 @@ class IntakeScreeningResult:
     confidence: str
 
 
-_FILTER_TERMS = ("体检", "面试通知", "拟录取", "录用公示", "录取公示", "入职报到", "收费招聘", "培训贷")
+_PROGRESS_TERMS = ("体检", "面试通知", "拟录取", "录用公示", "录取公示", "入职报到")
+_FILTER_TERMS = ("收费招聘", "培训贷")
 _SENIOR_TERMS = ("副教授", "正教授", "博士后", "高级职称", "负责人", "总经理", "行长", "总监", "三年以上", "3年以上", "50岁以上", "五十岁以上")
 _A_TERMS = ("实习", "应届", "校招", "校园招聘", "管培生", "毕业两年")
+_APPLICATION_TERMS = ("简历投递", "投递简历", "报名方式", "报名时间", "报名截止", "应聘方式", "申请方式", "官方投递邮箱", "官方报名入口", "官方投递入口")
+_ASSISTING_SENIOR = re.compile(r"(?:协助|配合)(?:部门|团队|项目)?(?:负责人|总经理|行长|总监)")
 _ROUTES = {"A": "优先待核验", "B": "普通待核验", "C": "人工复核", "D": "过滤留档"}
 
 
 def screen_intake(title: str, evidence_text: str) -> IntakeScreeningResult:
     """Conservative A/B/C/D screening; uncertain content is never discarded."""
+    hard_result = _hard_filter(title, evidence_text)
+    if hard_result is not None:
+        return hard_result
     text = f"{title}\n{evidence_text}".strip()
-    for term in _FILTER_TERMS + _SENIOR_TERMS:
-        if term in text:
-            return IntakeScreeningResult("D", "过滤留档", f"原文出现“{term}”，不适合学生招聘入库。", term, "高")
     for term in _A_TERMS:
         if term in text:
             return IntakeScreeningResult("A", "优先待核验", f"原文出现“{term}”学生或初级岗位信号。", term, "高")
@@ -35,14 +39,27 @@ def screen_intake(title: str, evidence_text: str) -> IntakeScreeningResult:
 def build_intake_screening_prompt(title: str, evidence_text: str) -> str:
     return f"""你是学生招聘线索初筛助手。只根据原文判断 A/B/C/D，返回纯 JSON：grade, reason, evidence, confidence。
 A=实习、校招、应届或毕业两年内初级岗位；B=可能适配但需要人工确认；C=原文不完整或适配不明；D=体检、面试、录用等进度通知，或明确高职称、负责人、三年以上经验、年龄偏高、收费招聘等。
+标题为进度通知仍判D；学生招聘提供明确投递或报名说明时，正文的后续体检、面试等流程安排不能单独作为D级依据。收费、培训贷或明确高级资历要求仍判D。
 evidence 必须是原文中连续出现的短语。不得推断岗位条件。grade 只能是 A/B/C/D，confidence 只能是 高/中/低。
 标题：{title}\n原文：{evidence_text[:6000]}"""
 
 
 def _hard_filter(title: str, evidence_text: str) -> IntakeScreeningResult | None:
     text = f"{title}\n{evidence_text}".strip()
-    for term in _FILTER_TERMS + _SENIOR_TERMS:
+    for term in _FILTER_TERMS:
         if term in text:
+            return IntakeScreeningResult("D", "过滤留档", f"原文出现“{term}”，不适合学生招聘入库。", term, "高")
+    # Assisting a manager is a junior duty, not a requirement to be that manager.
+    senior_text = f"{title}\n{_ASSISTING_SENIOR.sub('', evidence_text)}"
+    for term in _SENIOR_TERMS:
+        if term in senior_text:
+            return IntakeScreeningResult("D", "过滤留档", f"原文出现“{term}”，不适合学生招聘入库。", term, "高")
+    has_student_application = any(term in text for term in _A_TERMS) and any(
+        term in text for term in _APPLICATION_TERMS
+    )
+    progress_text = title if has_student_application else text
+    for term in _PROGRESS_TERMS:
+        if term in progress_text:
             return IntakeScreeningResult("D", "过滤留档", f"原文出现“{term}”，不适合学生招聘入库。", term, "高")
     return None
 

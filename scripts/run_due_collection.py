@@ -9,8 +9,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.database import create_database
-from app.main import DEFAULT_DATABASE_URL
 from app.services.real_collection import collect_due_sources
+
+
+DEFAULT_DATABASE_URL = f"sqlite:///{(PROJECT_ROOT / 'data' / 'recruiting_local.db').as_posix()}"
 
 
 def main() -> int:
@@ -22,7 +24,7 @@ def main() -> int:
         f"跳过 {result.skipped_sources}；新增 {result.created_jobs}，"
         f"更新 {result.updated_jobs}，无变化 {result.unchanged_jobs}。"
     )
-    return 0 if result.successful_sources else 1
+    return 1 if result.attempted_sources > 0 and result.successful_sources == 0 else 0
 
 
 if __name__ == "__main__":

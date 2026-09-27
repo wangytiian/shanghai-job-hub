@@ -2,7 +2,7 @@ from datetime import datetime
 
 import pytest
 
-from app.models import Job, Source
+from app.models import Job, Source, TaskRun
 from app.services.real_collection import collect_due_sources, collect_shanghai_sasac
 
 
@@ -270,3 +270,38 @@ def test_campus_formal_collection_uses_shared_policy_and_rejects_school_listing_
 
     assert result.created_jobs == 0
     assert session.query(Job).filter_by(is_demo=False).count() == 0
+
+
+def test_sasac_all_detail_failures_are_not_reported_as_success(monkeypatch, session):
+    from app.services import real_collection
+    monkeypatch.setattr(real_collection, "fetch_shanghai_sasac_listings", lambda *a, **kw: [object()])
+    def broken(*a, **kw):
+        raise ValueError("公告详情页未提取到可保存的正文")
+    monkeypatch.setattr(real_collection, "fetch_shanghai_sasac_detail", broken)
+    with pytest.raises(ValueError, match="全部详情"):
+        collect_shanghai_sasac(session, object())
+    source = session.query(Source).one()
+    assert source.last_success_at is None
+    assert source.consecutive_failure_count == 1
+    assert "正文" in source.last_error_summary
+
+
+def test_sasac_partial_details_keep_diagnostic_reason(monkeypatch, session):
+    from app.services import real_collection
+    from app.sources.shanghai_sasac import ShanghaiSasacDetail, ShanghaiSasacListing
+    good = ShanghaiSasacListing("学生实习", "2026-09-26", "https://www.gzw.sh.gov.cn/good")
+    bad = ShanghaiSasacListing("图片校招", "2026-09-26", "https://www.gzw.sh.gov.cn/bad")
+    monkeypatch.setattr(real_collection, "fetch_shanghai_sasac_listings", lambda *a, **kw: [good, bad])
+    def fetch(_client, item):
+        if item is bad:
+            raise ValueError("公告详情页未提取到可保存的正文")
+        return ShanghaiSasacDetail(good.title, good.published_at, good.detail_url, "工作职责：上海实习", "工作职责：上海实习")
+    monkeypatch.setattr(real_collection, "fetch_shanghai_sasac_detail", fetch)
+    result = collect_shanghai_sasac(session, object())
+    assert (result.created_jobs, result.failed_jobs) == (1, 1)
+    source = session.query(Source).one()
+    assert "正文" in source.last_error_summary
+    assert "部分" in source.last_monitor_summary
+    run = session.query(TaskRun).one()
+    assert run.status == "部分完成"
+    assert bad.detail_url in run.message

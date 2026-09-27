@@ -121,6 +121,8 @@ def parse_sbs_detail(html: str, listing: SbsListing) -> SbsJobDetail:
     description = _description_html(soup)
     if not description:
         raise ValueError("上海商学院就业网详情缺少职位描述")
+    if len(description) < 20:
+        raise ValueError("上海商学院就业网职位描述不足，需人工补充正文")
     employer_name = fields.get("公司名称", "") or listing.employer_name
     title = fields.get("职位名称", "") or listing.title
     location_detail = fields.get("工作地区", "")
@@ -133,7 +135,7 @@ def parse_sbs_detail(html: str, listing: SbsListing) -> SbsJobDetail:
         f"招聘公告：{listing.title}", f"发布时间：{published_at}", f"招聘单位：{employer_name}",
         f"岗位名称：{title}", f"岗位地点：{location_detail}", f"职位类别：{fields.get('职位类别', '')}",
         f"专业要求：{fields.get('要求专业', '')}", f"学历要求：{fields.get('要求学历', '')}",
-        f"截止日期：{deadline}", f"正文：{description}",
+        f"截止日期：{deadline}", f"职位描述：{description}",
     ]
     if official_url:
         evidence_lines.append(f"官方报名入口：{official_url}")

@@ -88,6 +88,12 @@ def test_sources_page_separates_catalog_demo_and_schedulable_counts():
     assert "当前可调度 7 家" in response.text
 
 
+def test_sources_page_places_enabled_a_tier_sources_before_disabled_sources():
+    response = TestClient(create_app("sqlite+pysqlite:///:memory:")).get("/sources")
+
+    assert response.text.index("上海商学院就业网") < response.text.index("国家大学生就业服务平台上海岗位")
+
+
 def test_source_health_check_route_returns_feedback_on_sources_page(monkeypatch):
     from app.services.source_diagnostics import SourceDiagnosticResult
 

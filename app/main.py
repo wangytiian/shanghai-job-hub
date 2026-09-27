@@ -535,8 +535,18 @@ def create_app(database_url: str | None = None, *, settings: Settings | None = N
             source_records = session.scalars(
                 select(Source)
                 .where(Source.name.in_([definition.name for definition in OFFICIAL_SOURCE_CATALOG]))
-                .order_by(Source.name.contains("真实公开来源").desc(), Source.id)
+                .order_by(Source.id)
             ).all()
+            source_records.sort(
+                key=lambda source: (
+                    not (
+                        source.library_tier == "A"
+                        and source.is_enabled
+                        and source.status == "正常"
+                    ),
+                    source.id,
+                )
+            )
             source_plans = {
                 source.id: build_collection_plan(
                     source.level, __import__("datetime").datetime.now(), source.last_success_at

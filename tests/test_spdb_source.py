@@ -1,6 +1,9 @@
 from datetime import date, datetime
 from importlib.util import find_spec
 
+import httpx
+import pytest
+
 SPDB_LIST_PAYLOAD = {
     "rows": [
         {
@@ -121,6 +124,30 @@ def test_spdb_adapter_fetches_job_evidence_from_the_official_detail_endpoint():
     assert details.details[0].official_url.endswith("jobDetail?jobId=10023076&type=1")
     assert "数字平台部" in details.details[0].evidence_text
     assert "本科及以上" in details.details[0].evidence_text
+
+
+@pytest.mark.parametrize("protected_path", ["/socialJobJsonList", "/jobDetailJSON"])
+def test_spdb_fetch_sends_the_public_page_referer_required_by_each_endpoint(protected_path):
+    from app.sources.spdb import fetch_spdb_shanghai_job_details
+
+    def respond(request):
+        expected_referer = (
+            "https://job.spdb.com.cn/socialJob"
+            if request.url.path == "/socialJobJsonList"
+            else "https://job.spdb.com.cn/jobDetail?jobId=10023076&type=1"
+        )
+        if request.url.path == protected_path and request.headers.get("Referer") != expected_referer:
+            return httpx.Response(500, json={"message": "Referer error", "statusCode": 400})
+        if request.method == "POST":
+            return httpx.Response(200, json=SPDB_LIST_PAYLOAD)
+        detail = FakeSpdbClient().get(str(request.url)).json()
+        return httpx.Response(200, json=detail)
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        result = fetch_spdb_shanghai_job_details(client, limit=1, today=date(2026, 8, 31))
+
+    assert [detail.title for detail in result.details] == ["客服代表岗（上海-应届生）"]
+    assert "为客户提供远程服务" in result.details[0].evidence_text
 
 
 def test_spdb_fetch_reports_student_fit_filtered_count():
