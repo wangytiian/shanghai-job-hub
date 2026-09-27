@@ -28,6 +28,16 @@ SSPU_NEWS_SOURCE = CampusJsonSource(
 class UnsupportedSspuAnnouncement(ValueError):
     """A public external-link notice has no locally verifiable job body."""
 
+    reason_code = "EXTERNAL_LINK_UNSUPPORTED"
+
+
+class UnsupportedSspuStructure(UnsupportedSspuAnnouncement):
+    """Readable public content cannot safely be expanded with supported layouts."""
+
+    def __init__(self, message: str, reason_code: str = "LAYOUT_UNSUPPORTED"):
+        super().__init__(message)
+        self.reason_code = reason_code
+
 
 _NUMBERED = re.compile(r"^(\d{1,4})\s*[、.．]\s*(.{1,100})$")
 _LABELLED = re.compile(r"^(?:职位名称|岗位名称)\s*[:：]\s*(.{1,100})$")
@@ -100,6 +110,10 @@ def _paragraphs(html: str) -> list[tuple[str, list[tuple[str, str]]]]:
             links = [(_text(a.get("href")), _text(a.get_text(" ", strip=True))) for a in block.find_all("a")]
             paragraphs.append((text, links))
     if not paragraphs:
+        if soup.find("img"):
+            raise UnsupportedSspuStructure("二工大图片公告没有可验证文字岗位，不自动识图", "IMAGE_ONLY_UNSUPPORTED")
+        if soup.get_text(" ", strip=True):
+            raise UnsupportedSspuStructure("二工大正文缺少支持的岗位分段结构")
         raise ValueError("二工大公告缺少可分段的公开正文")
     return paragraphs
 
@@ -181,11 +195,35 @@ def _location(own_text: str, metadata_location: str | None, common_text: str) ->
     own_match = _WORKPLACE.search(own_text)
     common_match = _WORKPLACE.search(common_text)
     detail = (own_match.group(1).strip() if own_match else metadata_location) or (common_match.group(1).strip() if common_match else "")
-    if "上海" in detail:
+    workplace = re.sub(r"上海\s*[（(][^）)]*(?:培训|培养|面试|总部)[^）)]*[）)]", "", detail)
+    workplace = re.sub(r"[（(][^）)]*上海[^）)]*(?:培训|培养|面试|总部)[^）)]*[）)]", "", workplace)
+    # A city mentioned solely for training, interviews, or company headquarters
+    # does not establish where the position will actually be based.
+    workplace = "，".join(part for part in re.split(r"[，,、/；;]", workplace)
+                         if not ("上海" in part and re.search(r"培训|培养|面试|总部", part)))
+    if "上海" in workplace:
         return "明确上海", detail
-    if _OTHER_AREA.search(detail):
+    if _OTHER_AREA.search(workplace):
         return "其他地区", detail
     return "原文未明确", detail
+
+
+def _common_constraints(prefix: list) -> list[str]:
+    constraints = []
+    in_section = False
+    header = re.compile(r"^(?:本次|统一)?(?:招聘对象|应聘对象|学历要求|应聘要求|报名条件|资格要求|招聘范围|报名截止(?:时间)?|投递截止(?:时间)?|申请截止(?:时间)?|截止日期|截止时间)\s*[:：]?")
+    exclusive = re.compile(r"(?:仅限|只限|只接受|仅接受|只招|仅招|仅面向|限).{0,45}(?:学生|毕业生|应届|本校|二工大|硕士|博士|研究生|本科)")
+    deadline = re.compile(r"(?:报名|投递|申请).{0,10}(?:截止|截至)|截止(?:日期|时间)")
+    for text, _ in prefix:
+        labelled = header.search(text)
+        if labelled or exclusive.search(text) or deadline.search(text):
+            constraints.append(_evidence_line(text))
+            in_section = bool(labelled)
+        elif in_section and re.search(r"硕士|博士|本科|专科|研究生|毕业生|应届|本校|二工大|20\d{2}[年./-]", text):
+            constraints.append(_evidence_line(text))
+        else:
+            in_section = False
+    return constraints
 
 
 def parse_sspu_details(payload: object, announcement: CampusAnnouncement) -> list[CampusJobDetail]:
@@ -215,10 +253,10 @@ def parse_sspu_details(payload: object, announcement: CampusAnnouncement) -> lis
         elif numbered and _HEADCOUNT.search(text):
             raise ValueError("二工大疑似岗位标题无法可靠分段，需人工确认")
     if not boundaries:
-        raise ValueError("二工大公告未识别到有事实正文的独立岗位分段")
+        raise UnsupportedSspuStructure("二工大公告未识别到支持的独立岗位分段")
     prefix = paragraphs[:boundaries[0][0]]
     # Keep explicit access/audience restrictions; never infer them from a parent title.
-    restrictions = [_evidence_line(text) for text, _ in prefix if re.search(r"(?:仅限|仅面向|只招|仅招).{0,45}(?:学生|毕业生|应届|本校|二工大)", text)]
+    restrictions = _common_constraints(prefix)
     common = paragraphs[tail_start:]
     common_text = "\n".join(_evidence_line(text) for text, _ in common)
     employer_name = _employer(data, prefix, announcement)

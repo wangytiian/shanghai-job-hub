@@ -225,6 +225,8 @@ def test_verified_numbered_sample_keeps_all_83_boundaries_with_missing_degree_sl
     for number in [56, 57]:
         assert "2027" in by_id[f"101:{number}"].evidence_text
     assert "胶州" in by_id["101:39"].location_detail
+    assert by_id["101:50"].location_category == "其他地区"
+    assert by_id["101:51"].location_category == "其他地区"
     assert by_id["101:21"].location_detail == "北京/济南"
     assert "线上业务中心销售培训生" not in by_id["101:17"].evidence_text
 
@@ -256,3 +258,53 @@ def test_known_numbered_heading_with_unknown_pay_format_is_not_merged_into_previ
     html = numbered(1, "数据助理") + "<p>2、技术助理（1名）</p><p>薪酬另议，工作地点待定</p><p>硕士及以上，2027届。</p>"
     with pytest.raises(ValueError, match="分段"):
         adapter().parse_sspu_details(payload(html), ANNOUNCEMENT)
+
+
+@pytest.mark.parametrize("place,category", [
+    ("山东（前期上海培养）", "其他地区"),
+    ("山东，前期在上海培训", "其他地区"),
+    ("前期上海培训，后期山东工作", "其他地区"),
+    ("上海（培训地）/山东（正式工作地）", "其他地区"),
+    ("上海总部", "原文未明确"),
+    ("上海面试", "原文未明确"),
+    ("上海/山东", "明确上海"),
+    ("base上海，需出差", "明确上海"),
+])
+def test_transient_shanghai_training_or_headquarters_is_not_workplace(place, category):
+    job = adapter().parse_sspu_details(payload(numbered(50, "财务管培生", place)), ANNOUNCEMENT)[0]
+    assert job.location_detail == place
+    assert job.location_category == category
+
+
+@pytest.mark.parametrize("restriction", [
+    "只限本校学生报名", "只接受上海第二工业大学毕业生", "仅接受本校学生", "只招本校毕业生", "仅招本校毕业生", "限本校学生", "仅面向二工大学生", "仅限本校",
+    "学历要求：硕士及以上", "招聘对象：仅博士", "报名条件：仅限硕士研究生", "应聘要求：不接受本科生",
+    "报名截止：2026年10月30日", "投递截止时间：2026-10-30", "截止日期：2026-10-30",
+])
+def test_explicit_announcement_constraints_are_preserved(restriction):
+    html = f"<p>{restriction}</p>" + labelled("数据助理", "维护业务数据。")
+    job = adapter().parse_sspu_details(payload(html), ANNOUNCEMENT)[0]
+    assert restriction in job.evidence_text
+
+
+def test_announcement_constraint_heading_applies_to_its_following_value():
+    html = "<p>招聘对象：</p><p>仅硕士、博士研究生。</p><p>报名截止时间：</p><p>2026年10月30日。</p>" + labelled("数据助理", "维护业务数据。")
+    evidence = adapter().parse_sspu_details(payload(html), ANNOUNCEMENT)[0].evidence_text
+    assert "仅硕士、博士研究生" in evidence and "2026年10月30日" in evidence
+
+
+@pytest.mark.parametrize("body,code", [("<p><img src='/poster.jpg'></p>", "IMAGE_ONLY_UNSUPPORTED"), ("<p>招聘岗位清单：研发、设计、营销。</p><p>详见下方投递页面。</p>", "LAYOUT_UNSUPPORTED")])
+def test_unsupported_layouts_are_explicit_skips(body, code):
+    source = adapter()
+    assert hasattr(source, "UnsupportedSspuStructure")
+    with pytest.raises(source.UnsupportedSspuStructure) as error:
+        source.parse_sspu_details(payload(body), ANNOUNCEMENT)
+    assert isinstance(error.value, source.UnsupportedSspuAnnouncement)
+    assert error.value.reason_code == code
+
+
+def test_empty_body_is_data_error_not_an_unsupported_skip():
+    source = adapter()
+    with pytest.raises(ValueError) as error:
+        source.parse_sspu_details(payload(""), ANNOUNCEMENT)
+    assert not isinstance(error.value, source.UnsupportedSspuAnnouncement)
