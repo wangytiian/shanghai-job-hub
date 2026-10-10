@@ -23,6 +23,9 @@ from app.services.source_candidate_policy import (
 from app.sources.campus_json import SJTU_INTERNSHIP_SOURCE, SUFE_JOB_SOURCE
 from app.sources.ncss import fetch_ncss_detail, fetch_ncss_shanghai_listings
 from app.sources.sbs_jobs import fetch_sbs_detail, fetch_sbs_listings
+from app.sources.campus_jsonp import (
+    SUES_INTERNSHIP_SOURCE, SIT_INTERNSHIP_SOURCE, fetch_jsonp_listings, fetch_jsonp_details,
+)
 from app.services.source_request_budget import RequestBudgetController, is_transport_timeout
 
 
@@ -135,6 +138,7 @@ def _ncss_adapter(client, budget: TrialBudget) -> TrialCollection:
     listings = fetch_ncss_shanghai_listings(
         client,
         pages=budget.pages,
+        keywords=("财务", "运营", "审计"),
         timeout=float(budget.request_timeout_seconds),
         request_interval=budget.inter_request_seconds,
         controller=controller,
@@ -220,11 +224,60 @@ def _sbs_adapter(client, budget: TrialBudget) -> TrialCollection:
     return TrialCollection(len(listings), min(len(listings), budget.detail_limit), successful_details, tuple(candidates), tuple(failures))
 
 
+def _public_adapter(fetch_listings, fetch_details, listing_url: str) -> TrialAdapter:
+    """Collect a bounded set; reuse the same wall-clock guard for all requests."""
+    def collect(client, budget: TrialBudget) -> TrialCollection:
+        controller = RequestBudgetController(total_seconds=budget.total_seconds,
+            request_timeout_seconds=budget.request_timeout_seconds,
+            interval_seconds=budget.inter_request_seconds)
+        listings = fetch_listings(client, pages=budget.pages,
+            timeout=float(budget.request_timeout_seconds), controller=controller)[:budget.list_limit]
+        candidates, failures = [], []
+        attempts = successes = 0
+        for listing in listings[:budget.detail_limit]:
+            attempts += 1
+            try:
+                details = fetch_details(client, listing,
+                    timeout=float(budget.request_timeout_seconds), controller=controller)
+                candidates.extend(candidate_from_detail(detail, source_listing_url=listing_url)
+                                  for detail in details)
+                successes += 1
+            except Exception as exc:
+                identity = str(getattr(listing, "parent_id", getattr(listing, "rid", "")))
+                code = _classify_exception(exc)
+                failures.append(TrialFetchFailure(f"error:{identity}", identity,
+                    str(getattr(listing, "detail_url", "")),
+                    code if code != "TRIAL_FAILED" else "DETAIL_FETCH_FAILED", str(exc)[:500]))
+                if code in {"RATE_LIMITED", "ACCESS_RESTRICTED", "UPSTREAM_ERROR", "TIMEOUT"}:
+                    raise PartialTrialError(TrialCollection(len(listings), attempts, successes,
+                        tuple(candidates), tuple(failures)), exc) from exc
+        return TrialCollection(len(listings), attempts, successes, tuple(candidates), tuple(failures))
+    return collect
+
+
+def _jsonp_adapter(source) -> TrialAdapter:
+    return _public_adapter(
+        lambda client, **kwargs: fetch_jsonp_listings(client, source, **kwargs),
+        lambda client, listing, **kwargs: fetch_jsonp_details(client, source, listing, **kwargs),
+        source.listing_url,
+    )
+
+
+def _shcpa_adapter(client, budget: TrialBudget) -> TrialCollection:
+    from app.sources.shcpa import SHCPA_LIST_URL, fetch_shcpa_listings, fetch_shcpa_detail
+    return _public_adapter(fetch_shcpa_listings,
+        lambda client, listing, **kwargs: [fetch_shcpa_detail(client, listing, **kwargs)],
+        SHCPA_LIST_URL)(client, budget)
+
+
 TRIAL_ADAPTERS: dict[str, TrialAdapter] = {
     "sjtu_internship_json": _campus_adapter(SJTU_INTERNSHIP_SOURCE),
     "sufe_job_json": _campus_adapter(SUFE_JOB_SOURCE),
     "ncss_shanghai_jobs": _ncss_adapter,
     "sbs_jobs": _sbs_adapter,
+    "campus_jsonp_sues": _jsonp_adapter(SUES_INTERNSHIP_SOURCE),
+    "campus_jsonp_sit": _jsonp_adapter(SIT_INTERNSHIP_SOURCE),
+    "shcpa_jobs": _shcpa_adapter,
 }
 
 _REGISTERED_SOURCE_KEYS = {
@@ -232,6 +285,9 @@ _REGISTERED_SOURCE_KEYS = {
     "sjtu_internship_json": "sjtu-internships",
     "sufe_job_json": "sufe-jobs",
     "sbs_jobs": "sbs-jobs",
+    "campus_jsonp_sues": "sues-internships",
+    "campus_jsonp_sit": "sit-internships",
+    "shcpa_jobs": "shcpa-jobs",
 }
 
 

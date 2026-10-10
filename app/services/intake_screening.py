@@ -18,8 +18,25 @@ _FILTER_TERMS = ("收费招聘", "培训贷")
 _SENIOR_TERMS = ("副教授", "正教授", "博士后", "高级职称", "负责人", "总经理", "行长", "总监", "三年以上", "3年以上", "50岁以上", "五十岁以上")
 _A_TERMS = ("实习", "应届", "校招", "校园招聘", "管培生", "毕业两年")
 _APPLICATION_TERMS = ("简历投递", "投递简历", "报名方式", "报名时间", "报名截止", "应聘方式", "申请方式", "官方投递邮箱", "官方报名入口", "官方投递入口")
+REVIEW_NOTE = "受众待确认：原文未明确应届生或在校生可投，须人工核实后再决定是否分发。[TARGET_AUDIENCE_UNCLEAR]"
+_JOB_BODY_TERMS = ("岗位职责", "工作职责", "工作内容", "职位描述")
+_JOB_REQUIREMENT_TERMS = ("任职要求", "招聘要求", "岗位要求", "资格条件")
+_JUNIOR_TERMS = ("本科", "大专", "专科", "学历不限", "经验不限", "专员", "助理", "初级")
+_GENERIC_TITLE = re.compile(r"^(?:社会招聘|招聘公告|招聘简章|招聘信息|岗位汇总|岗位列表)(?:公告|信息)?$")
 _ASSISTING_SENIOR = re.compile(r"(?:协助|配合)(?:部门|团队|项目)?(?:负责人|总经理|行长|总监)")
 _ROUTES = {"A": "优先待核验", "B": "普通待核验", "C": "人工复核", "D": "过滤留档"}
+
+
+def _has_specific_junior_role(title: str, evidence_text: str) -> bool:
+    text = f"{title}\n{evidence_text}"
+    return (
+        bool(title.strip())
+        and not _GENERIC_TITLE.fullmatch(title.strip())
+        and any(term in evidence_text for term in _JOB_BODY_TERMS)
+        and any(term in evidence_text for term in _JOB_REQUIREMENT_TERMS)
+        and any(term in text for term in _JUNIOR_TERMS)
+        and any(term in evidence_text for term in _APPLICATION_TERMS)
+    )
 
 
 def screen_intake(title: str, evidence_text: str) -> IntakeScreeningResult:
@@ -31,8 +48,8 @@ def screen_intake(title: str, evidence_text: str) -> IntakeScreeningResult:
     for term in _A_TERMS:
         if term in text:
             return IntakeScreeningResult("A", "优先待核验", f"原文出现“{term}”学生或初级岗位信号。", term, "高")
-    if "社会招聘" in text or "社会人员" in text:
-        return IntakeScreeningResult("B", "普通待核验", "属于社会招聘，需人工确认是否开放给应届生。", "社会招聘", "中")
+    if _has_specific_junior_role(title, evidence_text):
+        return IntakeScreeningResult("B", "普通待核验", REVIEW_NOTE, "具体岗位及投递方式", "中")
     return IntakeScreeningResult("C", "人工复核", "原文缺少明确学生适配信号，保留给人工复核。", "未发现直接适配证据", "低")
 
 
@@ -83,10 +100,14 @@ def screen_intake_with_ai(
         context = f"{title}\n{evidence_text}"
         if grade not in _ROUTES or confidence not in {"高", "中", "低"} or not evidence or evidence not in context:
             raise ValueError("AI 返回的分级或证据不可核验")
+        if grade == "B" and not _has_specific_junior_role(title, evidence_text):
+            return IntakeScreeningResult(
+                "C", "人工复核", "AI 建议 B，但岗位级职责、初级条件或投递方式证据不足。", evidence, "低"
+            )
         return IntakeScreeningResult(
             grade,
             _ROUTES[grade],
-            reason or "AI 根据原文给出的初筛建议。",
+            REVIEW_NOTE if grade == "B" else reason or "AI 根据原文给出的初筛建议。",
             evidence,
             confidence,
         )

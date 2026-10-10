@@ -9,6 +9,7 @@ data/*.db
 data/*.sqlite
 data/*.sqlite3
 data/*.db-*
+backups/
 
 # Local secrets and machine-specific settings
 .env

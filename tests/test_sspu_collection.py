@@ -74,7 +74,7 @@ def test_sspu_catalog_preserves_operator_pause_and_disable(session):
     assert source.pause_reason == "人工停用"
 
 
-def test_sspu_saves_only_allowed_details_and_keeps_audience_unclear_as_c(session, monkeypatch):
+def test_sspu_saves_only_allowed_details_and_keeps_audience_unclear_as_pending_b(session, monkeypatch):
     result = _collect(session, monkeypatch, [
         _detail(),
         replace(_detail("101:2", student=False), title="跨境业务助理"),
@@ -83,7 +83,7 @@ def test_sspu_saves_only_allowed_details_and_keeps_audience_unclear_as_c(session
     ])
     jobs = session.query(Job).order_by(Job.id).all()
     assert result.created_jobs == 2 and result.failed_jobs == 0
-    assert [job.intake_grade for job in jobs] == ["A", "C"]
+    assert [job.intake_grade for job in jobs] == ["A", "B"]
     assert all(job.status == "待核验" and not job.is_demo for job in jobs)
     assert jobs[0].announcement_title == "示例物流公司招聘公告"
     assert jobs[0].published_at == datetime(2026, 9, 10)
@@ -149,7 +149,7 @@ def test_sspu_metadata_only_change_invalidates_approval_and_then_is_stable(sessi
 def test_sspu_experience_or_hr_duties_do_not_prove_student_eligibility(session, monkeypatch, extra):
     detail = _detail(student=False)
     _collect(session, monkeypatch, [replace(detail, evidence_text=detail.evidence_text + "\n" + extra)])
-    assert session.query(Job).one().intake_grade == "C"
+    assert session.query(Job).one().intake_grade == "B"
 
 
 @pytest.mark.parametrize("text", ["仅限上海第二工业大学学生", "仅面向二工大毕业生", "只招本校学生", "任职要求：硕士及以上学历", "8k~12k/上海/硕士", "学历要求：博士", "学历要求：硕士，专业不限。面向2027届应届生。"])
@@ -180,6 +180,26 @@ def test_sspu_changed_to_non_shanghai_invalidates_existing_record(session, monke
     assert job.status == "待核验" and job.intake_grade == "D"
     assert job.verification_version == 0
     assert job.location_detail == "北京市"
+
+
+def test_sspu_policy_only_exclusion_invalidates_stale_structure_form(session, monkeypatch):
+    _collect(session, monkeypatch, [_detail()])
+    job = session.query(Job).one()
+    previous_version, previous_row_version = job.version, job.row_version
+    job.status = "可发布"
+    job.verification_version = job.version
+    job.quality_score = 82
+    job.ai_suggested_score = 90
+    job.ai_score_status = "AI建议"
+    session.commit()
+
+    monkeypatch.setattr(real_collection, "_sspu_exclusion", lambda _detail: "SCHOOL_EXCLUSIVE")
+    result = _collect(session, monkeypatch, [_detail()])
+
+    assert result.updated_jobs == 1
+    assert (job.status, job.intake_grade, job.verification_version) == ("待核验", "D", 0)
+    assert (job.version, job.row_version) == (previous_version + 1, previous_row_version + 1)
+    assert (job.quality_score, job.ai_suggested_score, job.ai_score_status) == (0, 0, "待建议")
 
 
 def test_sspu_all_detail_failures_are_not_successful_empty_results(session, monkeypatch):

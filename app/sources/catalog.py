@@ -75,6 +75,15 @@ OFFICIAL_SOURCE_CATALOG = (
         source_key="sspu-news",
     ),
     # B: core sites awaiting a dedicated public-page adapter
+    _source("上海工程技术大学公开实习岗位", "https://career.sues.edu.cn/page/positionsx.html",
+            "上海学生就业", "B", 85, adapter_key="campus_jsonp_sues",
+            source_type="高校就业平台", source_key="sues-internships"),
+    _source("上海应用技术大学公开实习岗位", "https://job.sit.edu.cn/page/positionzp.html?type=1",
+            "上海学生就业", "B", 85, adapter_key="campus_jsonp_sit",
+            source_type="高校就业平台", source_key="sit-internships"),
+    _source("上海市注册会计师协会人才招聘", "https://www.shcpa.org.cn/recruit/getRecruitQueryList.do",
+            "上海财会就业", "B", 86, adapter_key="shcpa_jobs",
+            source_type="行业协会公开栏目", source_key="shcpa-jobs"),
     _source(
         "华东理工大学就业网（待专用适配）",
         "https://career.ecust.edu.cn/PositionList2.aspx/",

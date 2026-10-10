@@ -1,7 +1,7 @@
 from pathlib import Path
 import sys
 import subprocess
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -791,8 +791,18 @@ def test_queue_page_labels_both_channels_and_manual_sending_boundary():
     assert "不自动发送" in response.text
 
 
+def _app_with_current_demo_deadline():
+    """Keep demo UI flow tests about review/queue behavior, not a dated seed expiry."""
+    app = create_app("sqlite+pysqlite:///:memory:")
+    with app.state.session_factory() as session:
+        job = session.get(Job, 1)
+        job.deadline = (date.today() + timedelta(days=30)).isoformat()
+        session.commit()
+    return app
+
+
 def test_public_queue_item_opens_a_copy_ready_wechat_draft_page():
-    client = TestClient(create_app("sqlite+pysqlite:///:memory:"))
+    client = TestClient(_app_with_current_demo_deadline())
     client.post(
         "/jobs/1/review",
         data={"action": "approve", "note": "页面测试"},
@@ -812,7 +822,7 @@ def test_public_queue_item_opens_a_copy_ready_wechat_draft_page():
 
 
 def test_wechat_draft_rejects_a_stale_item_after_job_facts_change():
-    app = create_app("sqlite+pysqlite:///:memory:")
+    app = _app_with_current_demo_deadline()
     client = TestClient(app)
     client.post("/jobs/1/review", data={"action": "approve", "note": "演示审核通过"})
     client.post("/jobs/1/distribution")
@@ -828,7 +838,7 @@ def test_wechat_draft_rejects_a_stale_item_after_job_facts_change():
 
 
 def test_wechat_draft_page_offers_ai_content_refinement_before_copying():
-    client = TestClient(create_app("sqlite+pysqlite:///:memory:"))
+    client = TestClient(_app_with_current_demo_deadline())
     client.post("/jobs/1/review", data={"action": "approve", "note": "页面测试"})
     client.post("/jobs/1/distribution", follow_redirects=False)
 
@@ -839,7 +849,7 @@ def test_wechat_draft_page_offers_ai_content_refinement_before_copying():
 
 
 def test_review_endpoint_approves_a_valid_pending_job():
-    client = TestClient(create_app("sqlite+pysqlite:///:memory:"))
+    client = TestClient(_app_with_current_demo_deadline())
     jobs = client.get("/jobs?data_type=demo").text
     assert "示例金融集团" in jobs
 

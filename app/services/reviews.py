@@ -27,6 +27,8 @@ def review_job(
     if action == "approve":
         if job.status != "待审核":
             raise ValueError("只有待审核岗位可以通过")
+        if job.intake_grade not in {"A", "B"}:
+            raise ValueError("只有 A/B 分级岗位可以通过最终审核")
         if not note.strip():
             raise ValueError("通过前必须填写核验备注")
         errors = validate_publishable(job)

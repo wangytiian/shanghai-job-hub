@@ -1,9 +1,11 @@
+import httpx
 import pytest
 
 from app.database import create_database
 from app.models import AiProviderSetting
 from app.services.ai_settings import (
     AiSettingsService,
+    BailianClient,
     CredentialNotConfiguredError,
     OPENAI_API_MODE_RESPONSES,
     OPENAI_COMPATIBLE_PROVIDER,
@@ -253,3 +255,30 @@ def test_responses_api_posts_to_responses_and_reads_output_text(monkeypatch):
     assert captured["url"] == "https://gateway.example.test/responses"
     assert captured["json"]["input"] == "提取招聘字段"
     assert output == '{"employer_name":"上海示例单位"}'
+
+
+@pytest.mark.parametrize(
+    ("client", "args"),
+    [
+        (BailianClient(), ("sk-test", "qwen3.7-flash", "extract facts")),
+        (OpenAICompatibleClient(), ("sk-test", "https://gateway.example.test/v1", "gpt-test", "extract facts")),
+    ],
+)
+def test_text_completion_allows_120_second_read_without_changing_other_timeouts(monkeypatch, client, args):
+    captured = {}
+
+    def fake_post(url, **kwargs):
+        captured["timeout"] = kwargs["timeout"]
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "{}"}}]},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr("app.services.ai_settings.httpx.post", fake_post)
+
+    assert client.complete(*args) == "{}"
+    timeout = captured["timeout"]
+    assert isinstance(timeout, httpx.Timeout)
+    assert timeout.read == 120.0
+    assert timeout.connect == timeout.write == timeout.pool == 45.0

@@ -1,7 +1,8 @@
 import pytest
 
 from app.models import Job
-from app.services.distribution import build_wechat_draft, create_distribution_items
+from app.services.distribution import build_wechat_draft, create_distribution_items, filter_current_queue_items
+from app.services.review_intake import REVIEW_NOTE
 from app.services.tasks import run_demo_collection
 
 
@@ -70,6 +71,20 @@ def test_distribution_rechecks_publish_gate_and_records_fact_version(session, pe
 
     assert all(item.job_version == pending_review_job.version for item in items)
     assert all(item.template_version == "finjob-v1" for item in items)
+
+
+def test_queue_hides_old_drafts_after_audience_becomes_unconfirmed(session, pending_review_job):
+    pending_review_job.status = "可发布"
+    session.commit()
+    items = create_distribution_items(session, pending_review_job.id)
+    assert len(filter_current_queue_items(session, items)) == 2
+
+    pending_review_job.status = "待核验"
+    pending_review_job.intake_grade = "B"
+    pending_review_job.intake_reason = REVIEW_NOTE
+    pending_review_job.version += 1
+    session.commit()
+    assert filter_current_queue_items(session, items) == []
 
 
 @pytest.mark.parametrize("grade", ["C", "D"])

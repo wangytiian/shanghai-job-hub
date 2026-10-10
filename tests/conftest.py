@@ -1,4 +1,5 @@
 import sys
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -31,4 +32,5 @@ def demo_job(session):
 @pytest.fixture
 def pending_review_job(demo_job):
     demo_job.status = "待审核"
+    demo_job.deadline = (date.today() + timedelta(days=30)).isoformat()
     return demo_job

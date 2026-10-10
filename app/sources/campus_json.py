@@ -12,6 +12,7 @@ from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
+from app.services.source_candidate_policy import MULTI_POSITION_PARENT_MARKER
 from app.sources.shanghai_sasac import USER_AGENT
 from app.services.source_request_budget import RequestBudgetController, is_transport_timeout
 
@@ -98,6 +99,17 @@ _POSITION_LOCATION_KEYS = ("gzdz", "gzdd", "gzdq", "workLocation", "location", "
 _EXPLICIT_WORK_LOCATION_PATTERN = re.compile(
     r"(?:工作地点|工作地址|岗位地点)\s*(?:为|是|：|:)?\s*([^。；;\n]+)"
 )
+_DIRECT_SHANGHAI_WORK_LOCATION_PATTERN = re.compile(
+    r"(?:【|\[)?(?:工作地点|工作地址|岗位地点)(?:】|\])?\s*(?:为|是|：|:)?\s*上海(?:市)?(?=[。；;，,\s]|$)"
+)
+_WORK_LOCATION_LABEL_PATTERN = re.compile(r"(?:工作地点|工作地址|岗位地点)")
+_EXPLICIT_NON_SHANGHAI_CITY_PATTERN = re.compile(
+    r"[\u4e00-\u9fff]{2,6}(?:省|市|自治区)|^(?:北京|天津|重庆|深圳|广州|杭州|南京|苏州|长沙|西安|成都|武汉|厦门|青岛|香港|澳门)(?=[\s·,:：/\-]|$)"
+)
+_ROAD_NUMBER_PATTERN = re.compile(r"([\u4e00-\u9fff]{2,4}(?:大道|路|街))\s*(\d{1,5})")
+_SHANGHAI_DISTRICT_PATTERN = re.compile(
+    r"^上海(?:市|[\s·,:：/\-]+|(?:浦东新区|黄浦区|徐汇区|长宁区|静安区|普陀区|虹口区|杨浦区|闵行区|宝山区|嘉定区|金山区|松江区|青浦区|奉贤区|崇明区))"
+)
 
 
 def _text(value: object) -> str:
@@ -165,7 +177,9 @@ def parse_campus_announcements(payload: object, source: CampusJsonSource) -> lis
     return announcements
 
 
-def _evidence_lines(data: dict, announcement: CampusAnnouncement, position: dict | None) -> tuple[str, str, str]:
+def _evidence_lines(
+    data: dict, announcement: CampusAnnouncement, position: dict | None, *, multiple_positions: bool = False,
+) -> tuple[str, str, str]:
     body = _article_text(data.get("zpxxEditor"))
     if not body:
         raise ValueError("校园就业网详情缺少招聘公告正文")
@@ -177,8 +191,9 @@ def _evidence_lines(data: dict, announcement: CampusAnnouncement, position: dict
     lines = [
         f"招聘公告：{announcement.title}",
         f"发布时间：{announcement.published_at}",
-        f"正文：{body}",
     ]
+    if not multiple_positions:
+        lines.append(f"正文：{body}")
     if employer_name:
         lines.append(f"招聘单位：{employer_name}")
     if unit_address:
@@ -201,19 +216,71 @@ def _evidence_lines(data: dict, announcement: CampusAnnouncement, position: dict
     mail = mail or _text(data.get("jltdyx"))
     if mail:
         lines.append(f"官方投递邮箱：{mail}")
+    if multiple_positions:
+        lines.extend((MULTI_POSITION_PARENT_MARKER, f"正文：{body}"))
     return "\n".join(lines), position_title, position_location
 
 
-def _location(position_location: str, body: str, has_position: bool) -> tuple[str, str]:
+def _same_road_number(position_location: str, unit_address: str) -> bool:
+    position_match = _ROAD_NUMBER_PATTERN.search(position_location)
+    unit_match = _ROAD_NUMBER_PATTERN.search(unit_address)
+    if not position_match or not unit_match:
+        return False
+    position_road, position_number = position_match.groups()
+    unit_road, unit_number = unit_match.groups()
+    return (
+        position_number == unit_number
+        and (position_road.endswith(unit_road) or unit_road.endswith(position_road))
+    )
+
+
+def _unit_address_explicitly_shanghai(unit_address: str) -> bool:
+    address = unit_address.strip()
+    return bool(
+        _SHANGHAI_DISTRICT_PATTERN.match(address)
+        or address.startswith(("中国（上海）", "中国(上海)"))
+    )
+
+
+def _position_explicitly_shanghai(location: str) -> bool:
+    value = location.strip()
+    return value == "上海" or _unit_address_explicitly_shanghai(value)
+
+
+def _single_shanghai_work_location(body: str) -> bool:
+    # A parent announcement may mention multiple workplaces; one Shanghai
+    # sentence must not turn a different position into a Shanghai job.
+    return (
+        len(_WORK_LOCATION_LABEL_PATTERN.findall(body)) == 1
+        and _DIRECT_SHANGHAI_WORK_LOCATION_PATTERN.search(body) is not None
+    )
+
+
+def _location(
+    position_location: str,
+    body: str,
+    has_position: bool,
+    unit_address: str = "",
+    *,
+    parent_body_applies: bool = True,
+) -> tuple[str, str]:
     if position_location:
-        return ("明确上海", position_location) if "上海" in position_location else ("其他地区", position_location)
+        if _position_explicitly_shanghai(position_location):
+            return "明确上海", position_location
+        if not _EXPLICIT_NON_SHANGHAI_CITY_PATTERN.search(position_location):
+            if (parent_body_applies and _single_shanghai_work_location(body)) or (
+                _unit_address_explicitly_shanghai(unit_address)
+                and _same_road_number(position_location, unit_address)
+            ):
+                return "明确上海", f"上海市 · {position_location}"
+        return "其他地区", position_location
     if has_position:
         return "原文未明确", ""
     match = _EXPLICIT_WORK_LOCATION_PATTERN.search(body)
     if not match:
         return "原文未明确", ""
     explicit_location = match.group(1).strip()
-    if "上海" in explicit_location:
+    if _position_explicitly_shanghai(explicit_location):
         return "明确上海", explicit_location
     if explicit_location:
         return "其他地区", explicit_location
@@ -243,8 +310,16 @@ def parse_campus_details(payload: object, announcement: CampusAnnouncement) -> l
         detail_payloads = [(announcement.parent_id, None)]
     details: list[CampusJobDetail] = []
     for identity_key, position in detail_payloads:
-        evidence_text, position_title, position_location = _evidence_lines(data, announcement, position)
-        location_category, location_detail = _location(position_location, body, position is not None)
+        evidence_text, position_title, position_location = _evidence_lines(
+            data, announcement, position, multiple_positions=len(positions) > 1,
+        )
+        location_category, location_detail = _location(
+            position_location,
+            body,
+            position is not None,
+            _text(data.get("xxdz")),
+            parent_body_applies=len(positions) <= 1,
+        )
         details.append(
             CampusJobDetail(
                 title=position_title or announcement.title,

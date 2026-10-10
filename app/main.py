@@ -41,8 +41,12 @@ from app.services.source_admission import (
     AdmissionError, approve_source_admission, enqueue_source_trial,
     evaluate_source_admission,
 )
+from app.services.b_pilot_intake import import_trial_run, is_pilot_import_source
+from app.services.intake_promotion import promote_review_only_job
+from app.services.review_intake import REVIEW_NOTE
+from app.services.source_candidate_policy import RULE_VERSION
 from app.seed import seed_demo_data
-from app.services.distribution import build_wechat_draft, create_distribution_items
+from app.services.distribution import build_wechat_draft, create_distribution_items, filter_current_queue_items
 from app.services.real_collection import REAL_SOURCE_NAME, collect_due_sources, collect_shanghai_sasac
 from app.sources.catalog import OFFICIAL_SOURCE_CATALOG, ensure_official_source_catalog
 from app.services.reviews import review_job
@@ -133,11 +137,15 @@ def create_app(database_url: str | None = None, *, settings: Settings | None = N
             return "settings.manage"
         if path.startswith("/sources/") and path.endswith("/admission"):
             return "sources.approve"
+        if path.startswith("/sources/") and "/trials/" in path and path.endswith("/import"):
+            return "sources.approve"
         if path.startswith("/sources/") and path.endswith("/trials") and request.method == "POST":
             return "task.submit"
         if path.startswith("/distribution/") and path.endswith("/wechat"):
             return "distribution.preview"
         if path.startswith("/jobs/") and path.endswith("/review"):
+            return "review.decide"
+        if path.startswith("/jobs/") and path.endswith("/intake-promotion"):
             return "review.decide"
         if path.startswith("/tasks/"):
             return "business.read" if request.method == "GET" else "task.submit"
@@ -467,6 +475,18 @@ def create_app(database_url: str | None = None, *, settings: Settings | None = N
                 child_jobs=child_jobs,
                 child_status_counts=child_status_counts,
                 parent_job=parent_job,
+                current_user=getattr(request.state, "current_user", None),
+                can_promote_intake=(
+                    not settings.is_cloud
+                    or bool(
+                        getattr(request.state, "current_user", None)
+                        and (
+                            request.state.current_user.role == "admin"
+                            or request.state.current_user.can_review
+                        )
+                    )
+                ),
+                review_note=REVIEW_NOTE,
             ),
         )
 
@@ -621,7 +641,12 @@ def create_app(database_url: str | None = None, *, settings: Settings | None = N
             )
 
     @app.get("/sources/{source_id}/trials")
-    def source_trial_report(request: Request, source_id: int):
+    def source_trial_report(
+        request: Request,
+        source_id: int,
+        import_feedback: str = "",
+        import_feedback_kind: str = "",
+    ):
         with get_session() as session:
             source = session.get(Source, source_id)
             if source is None:
@@ -652,6 +677,36 @@ def create_app(database_url: str | None = None, *, settings: Settings | None = N
                 sample_application_links[sample.id] = safe_report_link(
                     sample.application_value
                 )
+            actor = getattr(request.state, "current_user", None)
+            can_import = not settings.is_cloud or bool(actor and actor.role == "admin")
+            run_by_id = {run.run_id: run for run in runs}
+            latest_sample_by_identity = {}
+            for sample in samples:
+                sample_run = run_by_id.get(sample.run_id)
+                if not sample_run or sample_run.state not in {"completed", "partial"} or not sample_run.finished_at:
+                    continue
+                previous = latest_sample_by_identity.get(sample.identity_key)
+                if previous is None or sample_run.finished_at > previous[0]:
+                    latest_sample_by_identity[sample.identity_key] = (sample_run.finished_at, sample.id)
+            pilot_latest_sample_ids = {value[1] for value in latest_sample_by_identity.values()}
+            pilot_existing_fingerprints = set(session.scalars(
+                select(Job.fingerprint).where(
+                    Job.fingerprint.in_(
+                        [f"{source.name}|{sample.identity_key}" for sample in samples]
+                    )
+                )
+            ).all()) if samples else set()
+            pilot_importable_run_ids = {
+                run.run_id
+                for run in runs
+                if can_import
+                and is_pilot_import_source(source)
+                and run.state in {"completed", "partial"}
+                and run.finished_at is not None
+                and datetime.now() - run.finished_at <= timedelta(days=30)
+                and run.adapter_version == source.adapter_version
+                and run.rule_version == RULE_VERSION
+            }
             return templates.TemplateResponse(
                 request,
                 "source_trials.html",
@@ -661,9 +716,50 @@ def create_app(database_url: str | None = None, *, settings: Settings | None = N
                     sample_source_links=sample_source_links,
                     sample_application_links=sample_application_links,
                     admission=evaluate_source_admission(session, source_id),
-                    current_user=getattr(request.state, "current_user", None),
+                    current_user=actor,
+                    pilot_importable_run_ids=pilot_importable_run_ids,
+                    pilot_latest_sample_ids=pilot_latest_sample_ids,
+                    pilot_existing_fingerprints=pilot_existing_fingerprints,
+                    import_feedback=import_feedback,
+                    import_feedback_kind=import_feedback_kind,
                 ),
             )
+
+    @app.post("/sources/{source_id}/trials/{run_id}/import")
+    def import_source_trial(
+        request: Request,
+        source_id: int,
+        run_id: str,
+        sample_id: int = Form(...),
+    ):
+        with get_session() as session:
+            actor = getattr(request.state, "current_user", None)
+            try:
+                result = import_trial_run(
+                    session,
+                    source_id,
+                    run_id,
+                    actor.id if actor else None,
+                    sample_ids=(sample_id,),
+                    max_jobs=1,
+                    request_id=getattr(request.state, "request_id", ""),
+                )
+                feedback = (
+                    f"试采处理：新增 {result.created} 条待核验、更新 {result.updated}"
+                    f"（其中撤销旧核验 {result.invalidated}）、"
+                    f"未变化 {result.unchanged}、跳过 {result.skipped}。"
+                )
+                if result.skip_reasons:
+                    feedback += " 跳过原因：" + "、".join(
+                        f"{reason} {count}" for reason, count in sorted(result.skip_reasons.items())
+                    )
+                kind = "success"
+            except ValueError as exc:
+                feedback, kind = str(exc), "error"
+        return RedirectResponse(
+            f"/sources/{source_id}/trials?{urlencode({'import_feedback': feedback, 'import_feedback_kind': kind})}",
+            status_code=303,
+        )
 
     @app.post("/sources/{source_id}/trials")
     def start_source_trial(request: Request, source_id: int):
@@ -1131,6 +1227,49 @@ def create_app(database_url: str | None = None, *, settings: Settings | None = N
                 raise HTTPException(404, "岗位不存在")
             return render_job_detail(request, session, job)
 
+    @app.post("/jobs/{job_id}/intake-promotion")
+    def promote_intake_grade(
+        request: Request,
+        job_id: int,
+        expected_version: int = Form(...),
+        expected_fingerprint: str = Form(...),
+        evidence_url: str = Form(...),
+        evidence_excerpt: str = Form(...),
+        note: str = Form(...),
+    ):
+        with get_session() as session:
+            actor = getattr(request.state, "current_user", None)
+            try:
+                original_job = session.get(Job, job_id)
+                original_grade = original_job.intake_grade if original_job else None
+                job = promote_review_only_job(
+                    session,
+                    job_id,
+                    actor_id=actor.id if actor else None,
+                    expected_version=expected_version,
+                    expected_fingerprint=expected_fingerprint,
+                    evidence_url=evidence_url,
+                    evidence_excerpt=evidence_excerpt,
+                    note=note,
+                    request_id=getattr(request.state, "request_id", ""),
+                )
+                return render_job_detail(
+                    request,
+                    session,
+                    job,
+                    (
+                        "受众证据已确认，仍须完成岗位核验和最终人工审核。"
+                        if original_grade == "B"
+                        else "入库分级已升为 B，仍须完成岗位核验和最终人工审核。"
+                    ),
+                    "success",
+                )
+            except ValueError as exc:
+                job = session.get(Job, job_id)
+                if job is None:
+                    raise HTTPException(404, "岗位不存在") from exc
+                return render_job_detail(request, session, job, str(exc), "error")
+
     @app.get("/jobs/{job_id}/structure")
     def job_structuring(
         request: Request,
@@ -1473,7 +1612,10 @@ def create_app(database_url: str | None = None, *, settings: Settings | None = N
     @app.get("/queues")
     def queues(request: Request):
         with get_session() as session:
-            items = session.scalars(select(DistributionItem).order_by(DistributionItem.id.desc())).all()
+            items = filter_current_queue_items(
+                session,
+                session.scalars(select(DistributionItem).order_by(DistributionItem.id.desc())).all(),
+            )
             return templates.TemplateResponse(
                 request,
                 "queues.html",

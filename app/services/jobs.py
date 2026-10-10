@@ -39,6 +39,10 @@ def verification_checks_complete(value: str) -> bool:
 
 def validate_publishable(job: Job, today: date | None = None) -> list[str]:
     errors: list[str] = []
+    if job.intake_grade not in {"A", "B"}:
+        errors.append("只有 A/B 分级岗位可以发布")
+    if "[TARGET_AUDIENCE_UNCLEAR]" in (job.intake_reason or ""):
+        errors.append("学生受众尚未人工确认")
     if not job.source_url.strip():
         errors.append("缺少来源链接")
     if not job.official_url.strip():

@@ -1,9 +1,32 @@
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
 
 from app.models import Job, Source, TaskRun
-from app.services.real_collection import collect_due_sources, collect_shanghai_sasac
+from app.services.real_collection import _screen_detail_intake, collect_due_sources, collect_shanghai_sasac
+from app.services.review_intake import REVIEW_NOTE
+
+
+@pytest.mark.parametrize("detail_url", [
+    "https://other.example.edu/jobs/role-1",
+    "http://career.example.edu/jobs/role-1",
+])
+@pytest.mark.parametrize("review_note", ["", REVIEW_NOTE])
+def test_b_intake_requires_official_https_detail_host_even_for_review_only(
+    detail_url, review_note
+):
+    source = Source(name="高校就业网", url="https://career.example.edu/jobs", level="A", source_type="高校")
+    detail = SimpleNamespace(
+        title="策划专员",
+        detail_url=detail_url,
+        evidence_text="职位描述：负责市场策划。任职要求：本科，经验不限。官方投递邮箱：jobs@example.com。",
+    )
+
+    result = _screen_detail_intake(source, detail, datetime(2026, 10, 10), review_note=review_note)
+
+    assert result.grade == "C"
+    assert "HTTPS" in result.reason
 
 
 class FakeResponse:

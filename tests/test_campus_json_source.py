@@ -247,6 +247,376 @@ def test_original_article_url_is_not_exposed_as_an_application_url():
     assert "官方原始链接：https://company.example.com/news/campus-2027" in detail.evidence_text
 
 
+@pytest.mark.parametrize(
+    ("body", "unit_address", "position_address", "expected_category"),
+    [
+        (
+            "<p>岗位职责：协助投研。【工作地点】：上海。可远程办公。</p>",
+            "北京市朝阳区示例路1号",
+            "黄浦区大沽路",
+            "明确上海",
+        ),
+        (
+            "<p>岗位职责：协助量化研究。</p>",
+            "中国（上海）自由贸易试验区泳耀路511弄2、3号",
+            "泳耀路511弄6号楼7层",
+            "明确上海",
+        ),
+        (
+            "<p>岗位职责：协助量化研究。</p>",
+            "上海市黄浦区南京东路100号",
+            "桂平路391号A座28楼",
+            "其他地区",
+        ),
+        (
+            "<p>岗位职责：协助量化研究。</p>",
+            "上海市静安区南京西路100号",
+            "南京西路100号",
+            "明确上海",
+        ),
+        (
+            "<p>岗位职责：协助量化研究。</p>",
+            "南京市上海大厦人民路100号",
+            "人民路100号",
+            "其他地区",
+        ),
+        (
+            "<p>岗位职责：协助量化研究。</p>",
+            "上海路100号",
+            "上海路100号",
+            "其他地区",
+        ),
+        (
+            "<p>岗位职责：协助量化研究。</p>",
+            "上海大厦人民路100号",
+            "人民路100号",
+            "其他地区",
+        ),
+        (
+            "<p>岗位职责：协助运营。工作地点：上海。另一岗位工作地点：苏州。</p>",
+            "北京市朝阳区示例路1号",
+            "黄浦区大沽路",
+            "其他地区",
+        ),
+        (
+            "<p>岗位职责：协助投研。工作地点：上海。</p>",
+            "上海市黄浦区南京东路100号",
+            "深圳市南山区科技园",
+            "其他地区",
+        ),
+    ],
+)
+def test_position_location_uses_only_direct_workplace_or_matching_shanghai_address_evidence(
+    body, unit_address, position_address, expected_category
+):
+    announcement = CampusAnnouncement(
+        "notice-cityless-position", "实习生招聘", "2026-10-01", "https://www.job.sjtu.edu.cn/career/zpxx/sxzpxx"
+    )
+    detail = parse_campus_details(
+        {
+            "code": 200,
+            "data": {
+                "zpxxEditor": body,
+                "dwmc": "上海示例投资公司",
+                "xxdz": unit_address,
+                "zwxxList": [
+                    {
+                        "zwxxid": "role-1",
+                        "zwmc": "投资实习生",
+                        "gzdz": position_address,
+                        "zwms": "协助投研",
+                    }
+                ],
+            },
+        },
+        announcement,
+    )[0]
+
+    assert detail.location_category == expected_category
+    assert position_address in detail.location_detail
+
+
+def test_shared_parent_work_location_does_not_override_cityless_sibling_position():
+    announcement = CampusAnnouncement(
+        "notice-multiple-locations", "多城市实习生招聘", "2026-10-01", "https://www.job.sjtu.edu.cn/career/zpxx/sxzpxx"
+    )
+    details = parse_campus_details(
+        {
+            "code": 200,
+            "data": {
+                "zpxxEditor": "<p>岗位职责：见具体岗位。工作地点：上海。</p>",
+                "dwmc": "示例全国集团",
+                "xxdz": "北京市朝阳区示例路1号",
+                "zwxxList": [
+                    {"zwxxid": "role-shanghai", "zwmc": "上海实习生", "gzdz": "上海市黄浦区"},
+                    {"zwxxid": "role-other", "zwmc": "异地实习生", "gzdz": "天心区"},
+                ],
+            },
+        },
+        announcement,
+    )
+
+    assert details[0].location_category == "明确上海"
+    assert details[1].location_category != "明确上海"
+
+
+def test_split_position_cannot_inherit_sibling_student_eligibility_from_parent_body():
+    from datetime import datetime
+
+    from app.services.review_intake import evaluate_review_intake
+    from app.services.source_candidate_policy import candidate_from_detail, evaluate_candidate
+
+    announcement = CampusAnnouncement(
+        "notice-mixed-roles", "多岗位招聘", "2026-10-01", "https://career.sufe.edu.cn/career/zpxx/zpxx"
+    )
+    details = parse_campus_details(
+        {
+            "code": 200,
+            "data": {
+                "zpxxEditor": (
+                    "<p>财务实习岗位：接受2027届应届生，负责财务分析。</p>"
+                    "<p>策划专员岗位：按岗位描述申请。</p>"
+                ),
+                "dwmc": "上海示例公司",
+                "jltdyx": "apply@example.com",
+                "zwxxList": [
+                    {"zwxxid": "intern", "zwmc": "财务实习生", "zwms": "岗位职责：协助财务分析。任职要求：在校生。", "gzdz": "上海市徐汇区"},
+                    {"zwxxid": "planner", "zwmc": "策划专员", "zwms": "岗位职责：负责活动策划。任职要求：本科及以上。", "gzdz": "上海市徐汇区"},
+                ],
+            },
+        },
+        announcement,
+    )
+    planner = details[1]
+    candidate = candidate_from_detail(planner)
+
+    assert "接受2027届应届生" in planner.evidence_text  # Full notice remains for manual review.
+    assert evaluate_candidate(candidate_from_detail(details[0]), now=datetime(2026, 10, 5)).verdict == "qualified"
+    decision = evaluate_review_intake(candidate, now=datetime(2026, 10, 5))
+    assert (decision.verdict, decision.reason_codes) == ("review_only", ("TARGET_AUDIENCE_UNCLEAR",))
+
+
+def test_split_position_cannot_inherit_sibling_application_email_from_parent_body():
+    from app.services.source_candidate_policy import candidate_from_detail
+
+    announcement = CampusAnnouncement(
+        "notice-role-email", "多岗位招聘", "2026-10-01", "https://career.sufe.edu.cn/career/zpxx/zpxx"
+    )
+    details = parse_campus_details(
+        {
+            "code": 200,
+            "data": {
+                "zpxxEditor": "<p>财务实习生请投递，官方投递邮箱：intern@example.com。</p>",
+                "dwmc": "上海示例公司",
+                "zwxxList": [
+                    {"zwxxid": "intern", "zwmc": "财务实习生", "zwms": "岗位职责：协助财务分析。", "gzdz": "上海市徐汇区"},
+                    {"zwxxid": "planner", "zwmc": "策划专员", "zwms": "岗位职责：负责活动策划。任职要求：本科及以上。", "gzdz": "上海市徐汇区"},
+                ],
+            },
+        },
+        announcement,
+    )
+    planner = candidate_from_detail(details[1])
+
+    assert "intern@example.com" in details[1].evidence_text
+    assert (planner.application_kind, planner.application_value, planner.application_evidence) == ("", "", "")
+
+
+def test_split_position_cannot_inherit_student_claim_from_parent_announcement_title():
+    from datetime import datetime
+
+    from app.services.review_intake import evaluate_review_intake
+    from app.services.source_candidate_policy import candidate_from_detail
+
+    announcement = CampusAnnouncement(
+        "notice-campus-title", "2027届校园招聘公告", "2026-10-01", "https://career.sufe.edu.cn/career/zpxx/zpxx"
+    )
+    details = parse_campus_details(
+        {
+            "code": 200,
+            "data": {
+                "zpxxEditor": "<p>请按具体岗位要求申请。</p>",
+                "dwmc": "上海示例公司",
+                "jltdyx": "apply@example.com",
+                "zwxxList": [
+                    {"zwxxid": "intern", "zwmc": "财务实习生", "zwms": "岗位职责：协助财务分析。", "gzdz": "上海市徐汇区"},
+                    {"zwxxid": "planner", "zwmc": "策划专员", "zwms": "岗位职责：负责活动策划。任职要求：本科及以上。", "gzdz": "上海市徐汇区"},
+                ],
+            },
+        },
+        announcement,
+    )
+
+    candidate = candidate_from_detail(details[1])
+    decision = evaluate_review_intake(candidate, now=datetime(2026, 10, 5))
+    assert (decision.verdict, decision.reason_codes) == ("review_only", ("TARGET_AUDIENCE_UNCLEAR",))
+
+
+def test_single_position_retains_parent_student_and_application_evidence():
+    from datetime import datetime
+
+    from app.services.source_candidate_policy import candidate_from_detail, evaluate_candidate
+
+    announcement = CampusAnnouncement(
+        "notice-single-role", "专员招聘", "2026-10-01", "https://career.sufe.edu.cn/career/zpxx/zpxx"
+    )
+    detail = parse_campus_details(
+        {
+            "code": 200,
+            "data": {
+                "zpxxEditor": (
+                    "<p>岗位职责：负责活动策划。任职要求：接受2027届应届生。"
+                    "工作地点：上海。官方投递邮箱：apply@example.com。</p>"
+                ),
+                "dwmc": "上海示例公司",
+                "zwxxList": [
+                    {"zwxxid": "planner", "zwmc": "策划专员", "zwms": "岗位职责：负责活动策划。", "gzdz": "上海市徐汇区"},
+                ],
+            },
+        },
+        announcement,
+    )[0]
+
+    candidate = candidate_from_detail(detail)
+    assert candidate.application_value == "apply@example.com"
+    assert evaluate_candidate(candidate, now=datetime(2026, 10, 5)).verdict == "qualified"
+
+
+@pytest.mark.parametrize(
+    ("description", "expected_verdict", "expected_reason"),
+    [
+        ("协助财务分析、尽职调查和报告整理。", "qualified", ""),
+        ("详见公告", "needs_evidence", "BODY_NOT_JOB_SPECIFIC"),
+    ],
+)
+def test_split_position_description_must_have_substantive_role_duties(
+    description, expected_verdict, expected_reason
+):
+    from datetime import datetime
+
+    from app.services.source_candidate_policy import candidate_from_detail, evaluate_candidate
+
+    announcement = CampusAnnouncement(
+        "notice-duties", "多岗位招聘", "2026-10-01", "https://career.sufe.edu.cn/career/zpxx/zpxx"
+    )
+    details = parse_campus_details(
+        {
+            "code": 200,
+            "data": {
+                "zpxxEditor": "<p>查看各岗位信息后投递。</p>",
+                "dwmc": "上海示例公司",
+                "jltdyx": "apply@example.com",
+                "zwxxList": [
+                    {"zwxxid": "intern", "zwmc": "财务实习生", "zwms": description, "gzdz": "上海市徐汇区"},
+                    {"zwxxid": "planner", "zwmc": "策划专员", "zwms": "负责活动策划和项目协同。", "gzdz": "上海市徐汇区"},
+                ],
+            },
+        },
+        announcement,
+    )
+    candidate = candidate_from_detail(details[0])
+
+    decision = evaluate_candidate(candidate, now=datetime(2026, 10, 5))
+    assert decision.verdict == expected_verdict
+    assert (expected_reason in decision.reason_codes) if expected_reason else not decision.reason_codes
+
+
+@pytest.mark.parametrize("description", [
+    "岗位职责：负责2027届毕业生招聘活动。任职要求：本科及以上学历。",
+    "岗位职责：负责招聘活动统筹。任职要求：熟悉2027届毕业生招聘流程。",
+    "岗位职责：负责招聘活动统筹。任职要求：2027届毕业生招聘经验优先。",
+])
+def test_recruiter_work_about_graduates_does_not_prove_recruiter_is_student_eligible(description):
+    from datetime import datetime
+
+    from app.services.review_intake import evaluate_review_intake
+    from app.services.source_candidate_policy import candidate_from_detail
+
+    announcement = CampusAnnouncement(
+        "notice-recruiter", "企业招聘", "2026-10-01", "https://career.sufe.edu.cn/career/zpxx/zpxx"
+    )
+    details = parse_campus_details(
+        {
+            "code": 200,
+            "data": {
+                "zpxxEditor": "<p>招聘信息以具体岗位为准。</p>",
+                "dwmc": "上海示例公司",
+                "jltdyx": "apply@example.com",
+                "zwxxList": [
+                    {"zwxxid": "recruiter", "zwmc": "招聘专员", "zwms": description, "gzdz": "上海市徐汇区"},
+                    {"zwxxid": "finance", "zwmc": "财务实习生", "zwms": "岗位职责：协助财务分析。任职要求：接受2027届毕业生。", "gzdz": "上海市徐汇区"},
+                ],
+            },
+        },
+        announcement,
+    )
+    recruiter = candidate_from_detail(details[0])
+
+    decision = evaluate_review_intake(recruiter, now=datetime(2026, 10, 5))
+    assert (decision.verdict, decision.reason_codes) == ("review_only", ("TARGET_AUDIENCE_UNCLEAR",))
+
+
+@pytest.mark.parametrize("recruiter_title", ["校招运营专员", "校园招聘运营专员"])
+def test_recruiter_title_with_campus_word_is_not_itself_student_eligibility(recruiter_title):
+    from datetime import datetime
+
+    from app.services.review_intake import evaluate_review_intake
+    from app.services.source_candidate_policy import candidate_from_detail
+
+    announcement = CampusAnnouncement(
+        "notice-campus-hr", "多岗位招聘", "2026-10-01", "https://career.sufe.edu.cn/career/zpxx/zpxx"
+    )
+    details = parse_campus_details(
+        {
+            "code": 200,
+            "data": {
+                "zpxxEditor": "<p>岗位具体条件以岗位说明为准。</p>",
+                "dwmc": "上海示例公司",
+                "jltdyx": "apply@example.com",
+                "zwxxList": [
+                    {"zwxxid": "recruiter", "zwmc": recruiter_title, "zwms": "岗位职责：负责校园招聘活动组织。任职要求：本科及以上学历。", "gzdz": "上海市徐汇区"},
+                    {"zwxxid": "finance", "zwmc": "财务实习生", "zwms": "岗位职责：协助财务分析。任职要求：接受2027届毕业生。", "gzdz": "上海市徐汇区"},
+                ],
+            },
+        },
+        announcement,
+    )
+
+    decision = evaluate_review_intake(candidate_from_detail(details[0]), now=datetime(2026, 10, 5))
+    assert (decision.verdict, decision.reason_codes) == ("review_only", ("TARGET_AUDIENCE_UNCLEAR",))
+
+
+def test_explicit_all_positions_experience_requirement_excludes_split_intern_role():
+    from datetime import datetime
+
+    from app.services.review_intake import evaluate_review_intake
+    from app.services.source_candidate_policy import candidate_from_detail
+
+    announcement = CampusAnnouncement(
+        "notice-all-senior", "多岗位招聘", "2026-10-01", "https://career.sufe.edu.cn/career/zpxx/zpxx"
+    )
+    details = parse_campus_details(
+        {
+            "code": 200,
+            "data": {
+                "zpxxEditor": "<p>所有岗位均要求3年以上工作经验。</p>",
+                "dwmc": "上海示例公司",
+                "jltdyx": "apply@example.com",
+                "zwxxList": [
+                    {"zwxxid": "intern", "zwmc": "数据实习生", "zwms": "岗位职责：协助数据整理。任职要求：接受2027届毕业生。", "gzdz": "上海市徐汇区"},
+                    {"zwxxid": "planner", "zwmc": "策划专员", "zwms": "岗位职责：负责活动策划。任职要求：本科及以上。", "gzdz": "上海市徐汇区"},
+                ],
+            },
+        },
+        announcement,
+    )
+    intern = candidate_from_detail(details[0])
+
+    decision = evaluate_review_intake(intern, now=datetime(2026, 10, 5))
+    assert decision.verdict == "excluded"
+    assert "SENIOR_ROLE" in decision.reason_codes
+
+
 def test_campus_request_retries_one_real_httpx_timeout():
     from app.services.source_request_budget import RequestBudgetController
 

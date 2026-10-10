@@ -4,12 +4,13 @@ from datetime import datetime
 from hashlib import sha256
 import json
 import re
+from urllib.parse import urlsplit
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Job, Source, SourceDiagnostic, TaskRun
-from app.services.intake_screening import screen_intake, screen_intake_with_ai
+from app.services.intake_screening import IntakeScreeningResult, screen_intake, screen_intake_with_ai
 from app.services.deadline_policy import extract_application_deadline, mark_job_expired
 from app.services.collection_strategy import build_collection_plan
 from app.services.source_library import can_auto_collect
@@ -119,6 +120,36 @@ def _evidence_status(detail) -> tuple[str, str]:
     return "正文已提取", ""
 
 
+def _screen_detail_intake(source: Source, detail, collected_now: datetime, intake_ai_complete=None,
+                          *, review_note: str = "") -> IntakeScreeningResult:
+    intake = (
+        screen_intake_with_ai(detail.title, detail.evidence_text, intake_ai_complete)
+        if intake_ai_complete is not None and not review_note
+        else screen_intake(detail.title, detail.evidence_text)
+    )
+    if review_note and review_note != REVIEW_NOTE:
+        raise ValueError("不支持的待复核原因")
+    if intake.grade != "B" and not review_note:
+        return intake
+    source_url = urlsplit(source.url)
+    detail_url = urlsplit(str(getattr(detail, "detail_url", "") or ""))
+    if source_url.scheme != "https" or detail_url.scheme != "https" or source_url.hostname != detail_url.hostname:
+        return IntakeScreeningResult(
+            "C", "人工复核", "岗位详情未位于已登记的官方 HTTPS 来源域名，保留人工复核。",
+            intake.evidence, "低",
+        )
+    if review_note:
+        return IntakeScreeningResult("B", "普通待核验", REVIEW_NOTE, intake.evidence, "中")
+    candidate = candidate_from_detail(detail, source_listing_url=source.url)
+    decision = evaluate_review_intake(candidate, now=collected_now)
+    if decision.verdict != "review_only":
+        return IntakeScreeningResult(
+            "C", "人工复核", "岗位级来源、上海地点或投递证据未通过 B 类准入，保留人工复核。",
+            ", ".join(decision.reason_codes) or intake.evidence, "低",
+        )
+    return intake
+
+
 def _record_source_success(source: Source, now: datetime) -> None:
     plan = build_collection_plan(source.level, now, now)
     source.status = "正常"
@@ -145,7 +176,7 @@ def _save_detail(
     detail,
     collected_now: datetime,
     intake_ai_complete=None,
-    *, review_note: str = "", fingerprint_context: str = "",
+    *, review_note: str = "", fingerprint_context: str = "", force_rescreen: bool = False,
 ) -> str:
     identity_key = str(getattr(detail, "identity_key", "") or "").strip()
     if not identity_key:
@@ -154,25 +185,59 @@ def _save_detail(
         identity_key = str(getattr(detail, "title", "") or "").strip()
     fingerprint = f"{source.name}|{identity_key}"
     job = session.scalar(select(Job).where(Job.fingerprint == fingerprint))
-    extracted_deadline = extract_application_deadline(detail.evidence_text)
-    if extracted_deadline is not None and extracted_deadline < collected_now.date():
-        if job is not None:
-            mark_job_expired(job, extracted_deadline)
-        return "expired"
     attachment_links = _attachment_links(detail)
-    evidence_status, evidence_note = _evidence_status(detail)
-    if review_note:
-        evidence_note = " ".join(filter(None, (evidence_note, review_note)))
     content_material = f"{detail.evidence_text}\n{attachment_links}"
     if fingerprint_context:
         content_material += "\n" + fingerprint_context
     content_fingerprint = _content_fingerprint(content_material)
+    extracted_deadline = extract_application_deadline(detail.evidence_text)
+    if extracted_deadline is not None and extracted_deadline < collected_now.date():
+        if job is not None:
+            changed = (
+                job.content_fingerprint != content_fingerprint
+                or job.status in {"待核验", "待审核", "可发布"}
+                or job.deadline != extracted_deadline.isoformat()
+                or job.verification_checks != "{}"
+                or job.verification_version != 0
+            )
+            if changed:
+                job.evidence_text = detail.evidence_text
+                job.content_fingerprint = content_fingerprint
+                job.announcement_title = detail.title
+                job.job_title = detail.title
+                job.employer_name = getattr(detail, "employer_name", job.employer_name)
+                job.official_url = getattr(detail, "official_url", job.official_url)
+                job.source_url = detail.detail_url
+                job.attachment_links = attachment_links
+                job.evidence_status, job.evidence_note = _evidence_status(detail)
+                job.published_at = _parse_published_at(getattr(detail, "published_at", "")) or job.published_at
+                job.intake_grade = "D"
+                job.intake_route = "过滤留档"
+                job.intake_reason = "原文明确报名期限已过，来源复查后移出可发布队列。"
+                job.intake_evidence = extracted_deadline.isoformat()
+                job.intake_confidence = "高"
+                job.verification_checks = "{}"
+                job.verification_version = 0
+                job.risk_flags = REAL_RISK_FLAG
+                job.quality_score = 0
+                job.ai_suggested_score = 0
+                job.ai_score_status = "待建议"
+                job.ai_score_reason = ""
+                job.ai_score_breakdown = "{}"
+                job.ai_score_confidence = "低"
+                job.ai_scored_at = None
+                job.distribution_recommendation = "仅保留资料库"
+                job.version += 1
+                job.row_version += 1
+            mark_job_expired(job, extracted_deadline)
+            job.last_verified_at = collected_now
+        return "expired"
+    evidence_status, evidence_note = _evidence_status(detail)
+    if review_note:
+        evidence_note = " ".join(filter(None, (evidence_note, review_note)))
     if job is None:
-        intake = (
-            screen_intake_with_ai(detail.title, detail.evidence_text, intake_ai_complete)
-            if intake_ai_complete is not None and not review_note
-            else screen_intake(detail.title, detail.evidence_text)
-        )
+        intake = _screen_detail_intake(source, detail, collected_now, intake_ai_complete,
+                                       review_note=review_note)
         session.add(
             Job(
                 fingerprint=fingerprint,
@@ -204,23 +269,33 @@ def _save_detail(
                 lifecycle_status="正常",
                 last_change_summary="",
                 status="待核验",
-                intake_grade="C" if review_note else intake.grade,
-                intake_route="人工复核" if review_note else intake.route,
-                intake_reason=review_note or intake.reason,
+                intake_grade=intake.grade,
+                intake_route=intake.route,
+                intake_reason=intake.reason,
                 intake_evidence=intake.evidence,
                 intake_confidence=intake.confidence,
             )
         )
         return "created"
-    if job.content_fingerprint == content_fingerprint:
+    if (
+        job.content_fingerprint == content_fingerprint
+        and job.source_url == detail.detail_url
+        and not force_rescreen
+    ):
         job.last_verified_at = collected_now
         return "unchanged"
     job.evidence_text = detail.evidence_text
     job.announcement_title = getattr(detail, "title", "") or job.announcement_title
+    job.job_title = getattr(detail, "title", "") or job.job_title
     job.evidence_status = evidence_status
     job.evidence_note = evidence_note
     job.employer_name = getattr(detail, "employer_name", job.employer_name)
+    job.recruitment_type = getattr(detail, "recruitment_type", job.recruitment_type)
+    job.location_category = getattr(detail, "location_category", job.location_category)
+    job.location_detail = getattr(detail, "location_detail", job.location_detail)
+    job.deadline = extracted_deadline.isoformat() if extracted_deadline else getattr(detail, "deadline", "") or "原文待人工确认"
     job.official_url = getattr(detail, "official_url", job.official_url)
+    job.source_url = detail.detail_url
     job.attachment_links = attachment_links
     job.last_verified_at = collected_now
     job.published_at = _parse_published_at(getattr(detail, "published_at", "")) or job.published_at
@@ -231,12 +306,22 @@ def _save_detail(
     job.risk_flags = REAL_RISK_FLAG
     job.verification_checks = "{}"
     job.verification_version = 0
-    if review_note:
-        job.intake_grade = "C"
-        job.intake_route = "人工复核"
-        job.intake_reason = review_note
-        job.intake_confidence = "低"
+    job.quality_score = 0
+    job.ai_suggested_score = 0
+    job.ai_score_status = "待建议"
+    job.ai_score_reason = ""
+    job.ai_score_breakdown = "{}"
+    job.ai_score_confidence = "低"
+    job.ai_scored_at = None
+    job.distribution_recommendation = "仅保留资料库"
+    intake = _screen_detail_intake(source, detail, collected_now, review_note=review_note)
+    job.intake_grade = intake.grade
+    job.intake_route = intake.route
+    job.intake_reason = intake.reason
+    job.intake_evidence = intake.evidence
+    job.intake_confidence = intake.confidence
     job.version += 1
+    job.row_version += 1
     return "updated"
 
 
@@ -545,6 +630,78 @@ def collect_sufe_job_announcements(
     )
 
 
+def _retract_sbs_job(session: Session, source: Source, detail, collected_now: datetime, reason_codes: tuple[str, ...]) -> bool:
+    """Re-screen a known SBS role without admitting a new, excluded role."""
+    identity_key = str(getattr(detail, "identity_key", "") or "").strip()
+    if not identity_key:
+        return False
+    job = session.scalar(select(Job).where(Job.fingerprint == f"{source.name}|{identity_key}"))
+    if job is None:
+        return False
+    deadline = extract_application_deadline(detail.evidence_text)
+    expired = deadline is not None and deadline < collected_now.date()
+    status = "已截止" if expired else "淘汰" if job.status == "淘汰" else "待核验"
+    reason = "来源复查不再符合入库条件：" + ", ".join(reason_codes)
+    attachment_links = _attachment_links(detail)
+    content_fingerprint = _content_fingerprint(f"{detail.evidence_text}\n{attachment_links}")
+    location_category = getattr(detail, "location_category", job.location_category)
+    location_detail = getattr(detail, "location_detail", job.location_detail)
+    if (
+        job.status == status
+        and job.intake_grade == "D"
+        and job.intake_route == "过滤留档"
+        and job.intake_reason == reason
+        and job.content_fingerprint == content_fingerprint
+        and job.location_category == location_category
+        and job.location_detail == location_detail
+        and job.verification_checks == "{}"
+        and job.verification_version == 0
+        and job.quality_score == 0
+    ):
+        job.last_verified_at = collected_now
+        return False
+
+    job.evidence_text = detail.evidence_text
+    job.evidence_status, job.evidence_note = _evidence_status(detail)
+    job.attachment_links = attachment_links
+    job.content_fingerprint = content_fingerprint
+    job.announcement_title = detail.title
+    job.job_title = detail.title
+    job.employer_name = detail.employer_name
+    job.recruitment_type = getattr(detail, "recruitment_type", job.recruitment_type)
+    job.location_category = location_category
+    job.location_detail = location_detail
+    job.official_url = getattr(detail, "official_url", "")
+    job.source_url = detail.detail_url
+    job.published_at = _parse_published_at(getattr(detail, "published_at", "")) or job.published_at
+    job.last_verified_at = collected_now
+    job.status = status
+    job.lifecycle_status = "有更新"
+    job.last_change_summary = "来源复查不再符合入库条件，原核验已撤销"
+    if expired:
+        mark_job_expired(job, deadline)
+    job.deadline = deadline.isoformat() if deadline else getattr(detail, "deadline", "") or "原文待人工确认"
+    job.intake_grade = "D"
+    job.intake_route = "过滤留档"
+    job.intake_reason = reason
+    job.intake_evidence = ", ".join(reason_codes)[:160]
+    job.intake_confidence = "高"
+    job.verification_checks = "{}"
+    job.verification_version = 0
+    job.risk_flags = REAL_RISK_FLAG
+    job.quality_score = 0
+    job.ai_suggested_score = 0
+    job.ai_score_status = "待建议"
+    job.ai_score_reason = ""
+    job.ai_score_breakdown = "{}"
+    job.ai_score_confidence = "低"
+    job.ai_scored_at = None
+    job.distribution_recommendation = "仅保留资料库"
+    job.version += 1
+    job.row_version += 1
+    return True
+
+
 def collect_sbs_jobs(session: Session, client, pages: int = 3, now: datetime | None = None, intake_ai_complete=None) -> RealCollectionResult:
     """Collect SBS positions, retaining audience-only uncertainty for manual review."""
     collected_now = now or datetime.now()
@@ -570,9 +727,20 @@ def collect_sbs_jobs(session: Session, client, pages: int = 3, now: datetime | N
                 if decision.verdict not in {"qualified", "review_only"}:
                     skipped_jobs += 1
                     reasons.update(decision.reason_codes)
+                    if _retract_sbs_job(session, source, detail, collected_now, decision.reason_codes):
+                        updated_jobs += 1
                     continue
                 review_note = REVIEW_NOTE if decision.verdict == "review_only" else ""
-                outcome = _save_detail(session, source, detail, collected_now, intake_ai_complete, review_note=review_note)
+                existing = session.scalar(select(Job).where(Job.fingerprint == f"{source.name}|{detail.identity_key}"))
+                force_rescreen = bool(
+                    existing is not None
+                    and existing.intake_grade == "D"
+                    and existing.intake_reason.startswith("来源复查不再符合入库条件：")
+                )
+                outcome = _save_detail(
+                    session, source, detail, collected_now, intake_ai_complete,
+                    review_note=review_note, force_rescreen=force_rescreen,
+                )
                 if outcome == "created": created_jobs += 1
                 elif outcome == "updated": updated_jobs += 1
                 elif outcome == "unchanged": unchanged_jobs += 1
@@ -708,6 +876,7 @@ def collect_sspu_jobs(
                                 if existing.intake_grade != "D" or outcome == "updated":
                                     if outcome != "updated":
                                         existing.version += 1
+                                        existing.row_version += 1
                                     existing.status = "待核验"
                                     existing.intake_grade = "D"
                                     existing.intake_route = "过滤留档"
@@ -715,6 +884,14 @@ def collect_sspu_jobs(
                                     existing.verification_checks = "{}"
                                     existing.verification_version = 0
                                     existing.risk_flags = REAL_RISK_FLAG
+                                    existing.quality_score = 0
+                                    existing.ai_suggested_score = 0
+                                    existing.ai_score_status = "待建议"
+                                    existing.ai_score_reason = ""
+                                    existing.ai_score_breakdown = "{}"
+                                    existing.ai_score_confidence = "低"
+                                    existing.ai_scored_at = None
+                                    existing.distribution_recommendation = "仅保留资料库"
                                     counts["updated"] += 1
                         continue
                     review_note = REVIEW_NOTE if decision.verdict == "review_only" else ""
@@ -828,15 +1005,47 @@ def collect_shanghai_sasac(
                 extracted_deadline = extract_application_deadline(detail.evidence_text)
                 if extracted_deadline is not None and extracted_deadline < collected_now.date():
                     if job is not None:
+                        changed = (
+                            job.content_fingerprint != content_fingerprint
+                            or job.status in {"待核验", "待审核", "可发布"}
+                            or job.deadline != extracted_deadline.isoformat()
+                            or job.verification_checks != "{}"
+                            or job.verification_version != 0
+                        )
+                        if changed:
+                            job.evidence_text = detail.evidence_text
+                            job.content_fingerprint = content_fingerprint
+                            job.announcement_title = detail.title
+                            job.source_url = detail.detail_url
+                            job.published_at = _parse_published_at(detail.published_at) or job.published_at
+                            job.intake_grade = "D"
+                            job.intake_route = "过滤留档"
+                            job.intake_reason = "原文明确报名期限已过，来源复查后移出可发布队列。"
+                            job.intake_evidence = extracted_deadline.isoformat()
+                            job.intake_confidence = "高"
+                            job.verification_checks = "{}"
+                            job.verification_version = 0
+                            job.risk_flags = REAL_RISK_FLAG
+                            job.quality_score = 0
+                            job.ai_suggested_score = 0
+                            job.ai_score_status = "待建议"
+                            job.ai_score_reason = ""
+                            job.ai_score_breakdown = "{}"
+                            job.ai_score_confidence = "低"
+                            job.ai_scored_at = None
+                            job.distribution_recommendation = "仅保留资料库"
+                            job.version += 1
+                            job.row_version += 1
+                            updated_jobs += 1
+                        else:
+                            unchanged_jobs += 1
                         mark_job_expired(job, extracted_deadline)
-                    unchanged_jobs += 1
+                        job.last_verified_at = collected_now
+                    else:
+                        unchanged_jobs += 1
                     continue
                 if job is None:
-                    intake = (
-                        screen_intake_with_ai(detail.title, detail.evidence_text, intake_ai_complete)
-                        if intake_ai_complete is not None
-                        else screen_intake(detail.title, detail.evidence_text)
-                    )
+                    intake = _screen_detail_intake(source, detail, collected_now, intake_ai_complete)
                     session.add(
                         Job(
                             fingerprint=fingerprint,
@@ -890,7 +1099,12 @@ def collect_shanghai_sasac(
                     job.risk_flags = REAL_RISK_FLAG
                     job.verification_checks = "{}"
                     job.verification_version = 0
+                    intake = _screen_detail_intake(source, detail, collected_now)
+                    job.intake_grade, job.intake_route = intake.grade, intake.route
+                    job.intake_reason, job.intake_evidence = intake.reason, intake.evidence
+                    job.intake_confidence = intake.confidence
                     job.version += 1
+                    job.row_version += 1
                     updated_jobs += 1
             except Exception as exc:
                 failed_jobs += 1

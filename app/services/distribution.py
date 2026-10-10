@@ -15,6 +15,21 @@ NON_OFFICIAL_NOTICE = "本内容为面向上海立信会计金融学院学生的
 PLACEHOLDER_VALUES = {"以公告原文为准", "待人工判断", "待分类", "待核验", "原文待人工确认", "原文未明确"}
 
 
+def filter_current_queue_items(session: Session, items: list[DistributionItem]) -> list[DistributionItem]:
+    """Never expose copy-ready content for a job that is no longer publishable."""
+    visible: list[DistributionItem] = []
+    validity: dict[int, bool] = {}
+    for item in items:
+        job = session.get(Job, item.job_id)
+        if job is None:
+            continue
+        if job.id not in validity:
+            validity[job.id] = not validate_publishable(job)
+        if item.job_version == job.version and validity[job.id]:
+            visible.append(item)
+    return visible
+
+
 @dataclass(frozen=True)
 class WechatDraft:
     title: str

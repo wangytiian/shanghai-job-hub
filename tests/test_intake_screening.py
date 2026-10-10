@@ -3,6 +3,7 @@ import json
 import pytest
 
 from app.services.intake_screening import screen_intake, screen_intake_with_ai
+from app.services.review_intake import REVIEW_NOTE
 
 
 def test_progress_notice_is_filtered_to_grade_d():
@@ -24,6 +25,30 @@ def test_uncertain_notice_is_grade_c_for_human_review():
 
     assert result.grade == "C"
     assert result.route == "人工复核"
+
+
+def test_complete_junior_role_without_student_statement_is_pending_b():
+    result = screen_intake(
+        "策划专员",
+        "岗位职责：负责活动策划。任职要求：本科，相关经验者优先。"
+        "工作地点：上海。官方投递邮箱：jobs@example.com",
+    )
+
+    assert (result.grade, result.route, result.reason) == ("B", "普通待核验", REVIEW_NOTE)
+
+
+def test_generic_social_recruitment_without_role_and_application_stays_c():
+    result = screen_intake("社会招聘公告", "请查看附件了解招聘安排。")
+    assert result.grade == "C"
+
+
+def test_ai_b_still_requires_audience_confirmation():
+    result = screen_intake_with_ai(
+        "策划专员",
+        "岗位职责：负责活动策划。任职要求：本科。官方投递邮箱：jobs@example.com",
+        lambda _: '{"grade":"B","reason":"可能适配","evidence":"本科","confidence":"中"}',
+    )
+    assert (result.grade, result.reason) == ("B", REVIEW_NOTE)
 
 
 def test_ai_screening_uses_constrained_grade_when_no_hard_filter_matches():

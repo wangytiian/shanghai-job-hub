@@ -67,7 +67,7 @@ def test_sbs_review_only_lead_is_visible_but_not_promoted_or_duplicated(monkeypa
     first = collect_sbs_jobs(session, object(), now=datetime(2026, 9, 26))
     assert first.created_jobs == 1
     job = session.query(Job).one()
-    assert (job.intake_grade, job.status, job.intake_route) == ("C", "待核验", "人工复核")
+    assert (job.intake_grade, job.status, job.intake_route) == ("B", "待核验", "普通待核验")
     assert "受众" in job.intake_reason
     assert "TARGET_AUDIENCE_UNCLEAR" in job.evidence_note
     created_at = job.created_at
@@ -78,6 +78,198 @@ def test_sbs_review_only_lead_is_visible_but_not_promoted_or_duplicated(monkeypa
     assert (second.created_jobs, second.unchanged_jobs, session.query(Job).count()) == (0, 1, 1)
     assert job.created_at == created_at
     assert job.intake_grade == "B"
+
+
+@pytest.mark.parametrize("changed_url", [
+    "https://outside.example.edu/PositionDetail.aspx?zwid=35001",
+    "http://jiuye.sbs.edu.cn/PositionDetail.aspx?zwid=35001",
+])
+def test_sbs_same_body_changed_detail_url_rechecks_host_and_revokes_old_review(monkeypatch, session, changed_url):
+    from app.services.real_collection import collect_sbs_jobs
+    _, detail = _review_sample()
+    _mock_sbs(monkeypatch, detail)
+    assert collect_sbs_jobs(session, object(), now=datetime(2026, 9, 26)).created_jobs == 1
+    job = session.query(Job).one()
+    original_fingerprint = job.content_fingerprint
+    original_version, original_row_version = job.version, job.row_version
+    job.status = "可发布"
+    job.verification_checks = '{"source_checked": true}'
+    job.verification_version = 1
+    job.quality_score = 86
+    session.commit()
+
+    _mock_sbs(monkeypatch, replace(detail, detail_url=changed_url))
+    result = collect_sbs_jobs(session, object(), now=datetime(2026, 9, 27))
+
+    assert (result.updated_jobs, result.unchanged_jobs) == (1, 0)
+    assert job.source_url == changed_url
+    assert job.content_fingerprint == original_fingerprint
+    assert (job.intake_grade, job.intake_route, job.status) == ("C", "人工复核", "待核验")
+    assert "HTTPS" in job.intake_reason
+    assert (job.verification_checks, job.verification_version, job.quality_score) == ("{}", 0, 0)
+    assert (job.version, job.row_version) == (original_version + 1, original_row_version + 1)
+
+
+def test_sbs_changed_source_evidence_invalidates_stale_structure_form(monkeypatch, session):
+    from app.services.real_collection import collect_sbs_jobs
+    _, detail = _review_sample()
+    _mock_sbs(monkeypatch, detail)
+    collect_sbs_jobs(session, object(), now=datetime(2026, 9, 26))
+    job = session.query(Job).one()
+    old_version, old_row_version = job.version, job.row_version
+    job.quality_score = 82
+    job.ai_suggested_score = 90
+    job.ai_score_status = "AI建议"
+    session.commit()
+
+    _mock_sbs(monkeypatch, replace(detail, evidence_text=detail.evidence_text + "\n补充：每周到岗四天。"))
+    result = collect_sbs_jobs(session, object(), now=datetime(2026, 9, 27))
+
+    assert result.updated_jobs == 1
+    assert (job.version, job.row_version) == (old_version + 1, old_row_version + 1)
+    assert (job.quality_score, job.ai_suggested_score, job.ai_score_status) == (0, 0, "待建议")
+
+
+def test_sbs_excluded_refresh_retracts_existing_approved_job_without_deleting_history(monkeypatch, session):
+    from app.services.real_collection import collect_sbs_jobs
+    _, detail = _review_sample()
+    _mock_sbs(monkeypatch, detail)
+    collect_sbs_jobs(session, object(), now=datetime(2026, 9, 26))
+    job = session.query(Job).one()
+    old_id, old_version, old_row_version = job.id, job.version, job.row_version
+    job.status, job.intake_grade, job.verification_checks, job.verification_version = "可发布", "B", '{"source_checked": true}', 1
+    session.commit()
+
+    excluded = replace(detail, location_category="其他地区", location_detail="浙江省", evidence_text=detail.evidence_text + "\n岗位地点：浙江省。")
+    _mock_sbs(monkeypatch, excluded)
+    result = collect_sbs_jobs(session, object(), now=datetime(2026, 9, 27))
+
+    assert result.updated_jobs == 1
+    assert session.query(Job).count() == 1
+    assert job.id == old_id
+    assert (job.status, job.intake_grade, job.intake_route) == ("待核验", "D", "过滤留档")
+    assert "LOCATION_NOT_SHANGHAI" in job.intake_reason
+    assert job.evidence_text == excluded.evidence_text
+    assert (job.verification_checks, job.verification_version) == ("{}", 0)
+    assert (job.version, job.row_version) == (old_version + 1, old_row_version + 1)
+
+    repeated = collect_sbs_jobs(session, object(), now=datetime(2026, 9, 27, 8))
+    assert repeated.updated_jobs == 0
+    assert (job.version, job.row_version) == (old_version + 1, old_row_version + 1)
+
+
+def test_sbs_qualified_refresh_replaces_old_manual_audience_override(monkeypatch, session):
+    from app.services.real_collection import collect_sbs_jobs
+    _, detail = _review_sample()
+    _mock_sbs(monkeypatch, detail)
+    collect_sbs_jobs(session, object(), now=datetime(2026, 9, 26))
+    job = session.query(Job).one()
+    job.intake_grade = "B"
+    job.intake_reason = "人工曾确认适用，但原文后来变化"
+    job.status = "可发布"
+    session.commit()
+
+    qualified = replace(detail, evidence_text=(
+        "职位描述：负责市场资料整理、项目策划、活动执行与数据分析。"
+        "任职要求：面向2027届应届毕业生。截止日期：2026-11-30。官方投递邮箱：jobs@example.com"
+    ))
+    _mock_sbs(monkeypatch, qualified)
+    result = collect_sbs_jobs(session, object(), now=datetime(2026, 9, 27))
+
+    assert result.updated_jobs == 1
+    assert (job.intake_grade, job.intake_route, job.status) == ("A", "优先待核验", "待核验")
+    assert "人工曾确认" not in job.intake_reason
+    assert "应届" in job.intake_reason
+
+
+def test_sbs_expired_refresh_retracts_existing_publishable_job(monkeypatch, session):
+    from app.services.real_collection import collect_sbs_jobs
+    _, detail = _review_sample()
+    _mock_sbs(monkeypatch, detail)
+    collect_sbs_jobs(session, object(), now=datetime(2026, 9, 26))
+    job = session.query(Job).one()
+    old_version, old_row_version = job.version, job.row_version
+    job.status = "可发布"
+    job.intake_grade = "B"
+    session.commit()
+
+    expired = replace(detail, evidence_text=(
+        "职位描述：负责市场资料整理、项目策划、活动执行与数据分析。"
+        "截止日期：2026-09-20。官方投递邮箱：jobs@example.com"
+    ), deadline="2026-09-20")
+    _mock_sbs(monkeypatch, expired)
+    result = collect_sbs_jobs(session, object(), now=datetime(2026, 9, 27))
+
+    assert result.updated_jobs == 1
+    assert (job.status, job.lifecycle_status, job.deadline, job.intake_grade) == ("已截止", "已截止", "2026-09-20", "D")
+    assert "APPLICATION_EXPIRED" in job.intake_reason
+    assert (job.version, job.row_version) == (old_version + 1, old_row_version + 1)
+
+
+def test_sbs_new_audience_uncertainty_clears_old_manual_evidence(monkeypatch, session):
+    from app.services.real_collection import collect_sbs_jobs
+    _, detail = _review_sample()
+    qualified = replace(detail, evidence_text=(
+        "职位描述：负责市场资料整理、项目策划、活动执行与数据分析。"
+        "任职要求：面向2027届应届毕业生。截止日期：2026-11-30。官方投递邮箱：jobs@example.com"
+    ))
+    _mock_sbs(monkeypatch, qualified)
+    collect_sbs_jobs(session, object(), now=datetime(2026, 9, 26))
+    job = session.query(Job).one()
+    job.intake_grade = "B"
+    job.intake_evidence = "旧的人工受众证明"
+    session.commit()
+
+    _mock_sbs(monkeypatch, detail)
+    collect_sbs_jobs(session, object(), now=datetime(2026, 9, 27))
+
+    assert (job.intake_grade, job.intake_route) == ("B", "普通待核验")
+    assert "TARGET_AUDIENCE_UNCLEAR" in job.intake_reason
+    assert job.intake_evidence == "未发现直接适配证据"
+
+
+def test_sbs_changed_detail_refreshes_source_facts_before_new_manual_review(monkeypatch, session):
+    from app.services.real_collection import collect_sbs_jobs
+    _, detail = _review_sample()
+    _mock_sbs(monkeypatch, detail)
+    collect_sbs_jobs(session, object(), now=datetime(2026, 9, 26))
+    job = session.query(Job).one()
+
+    changed = replace(
+        detail,
+        title="品牌策划专员",
+        location_detail="上海市徐汇区",
+        deadline="2026-12-15",
+        evidence_text=(
+            "职位描述：负责市场资料整理、项目策划、活动执行与数据分析。"
+            "工作地点：上海市徐汇区。截止日期：2026-12-15。官方投递邮箱：jobs@example.com"
+        ),
+    )
+    _mock_sbs(monkeypatch, changed)
+    result = collect_sbs_jobs(session, object(), now=datetime(2026, 9, 27))
+
+    assert result.updated_jobs == 1
+    assert (job.job_title, job.location_detail, job.deadline) == ("品牌策划专员", "上海市徐汇区", "2026-12-15")
+
+
+def test_sbs_corrected_location_reenters_review_even_if_body_is_unchanged(monkeypatch, session):
+    from app.services.real_collection import collect_sbs_jobs
+    _, detail = _review_sample()
+    _mock_sbs(monkeypatch, detail)
+    collect_sbs_jobs(session, object(), now=datetime(2026, 9, 26))
+    job = session.query(Job).one()
+
+    _mock_sbs(monkeypatch, replace(detail, location_category="其他地区", location_detail="浙江省"))
+    collect_sbs_jobs(session, object(), now=datetime(2026, 9, 27))
+    assert job.intake_grade == "D"
+    previous_version = job.version
+
+    _mock_sbs(monkeypatch, detail)
+    result = collect_sbs_jobs(session, object(), now=datetime(2026, 9, 28))
+
+    assert result.updated_jobs == 1
+    assert (job.intake_grade, job.intake_route, job.status, job.location_detail) == ("B", "普通待核验", "待核验", "上海市")
+    assert job.version == previous_version + 1
 
 
 @pytest.mark.parametrize("change", [

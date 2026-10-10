@@ -19,6 +19,7 @@ ALLOWED_OPENAI_API_MODES = {OPENAI_API_MODE_CHAT_COMPLETIONS, OPENAI_API_MODE_RE
 ALLOWED_TEXT_MODELS = {DEFAULT_TEXT_MODEL}
 ALLOWED_OCR_MODELS = {DEFAULT_OCR_MODEL}
 BAILIAN_CHAT_COMPLETIONS_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+TEXT_COMPLETION_TIMEOUT = httpx.Timeout(45.0, read=120.0)
 
 
 class CredentialNotConfiguredError(RuntimeError):
@@ -81,7 +82,7 @@ class BailianClient:
             BAILIAN_CHAT_COMPLETIONS_URL,
             headers={"Authorization": f"Bearer {api_key}"},
             json={"model": model, "messages": [{"role": "system", "content": "Return only valid JSON."}, {"role": "user", "content": prompt}], "temperature": 0.1},
-            timeout=45.0,
+            timeout=TEXT_COMPLETION_TIMEOUT,
         )
         response.raise_for_status()
         return response.json()["choices"][0]["message"]["content"]
@@ -151,7 +152,7 @@ class OpenAICompatibleClient:
             self._safe_endpoint_url(base_url, api_mode),
             headers={"Authorization": f"Bearer {api_key}"},
             json=payload,
-            timeout=45.0,
+            timeout=TEXT_COMPLETION_TIMEOUT,
         )
         response.raise_for_status()
         response_payload = response.json()

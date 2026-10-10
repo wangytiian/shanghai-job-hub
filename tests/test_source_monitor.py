@@ -59,7 +59,7 @@ def test_sources_page_shows_v2_library_tiers_and_safe_boundaries():
 
     assert response.status_code == 200
     for label in (
-        "82 家分层来源库",
+        "85 家分层来源库",
         "自动采集来源",
         "核心专用适配库",
         "重点监控库",
@@ -83,7 +83,7 @@ def test_sources_page_uses_actual_a_tier_count_not_a_hardcoded_number():
 def test_sources_page_separates_catalog_demo_and_schedulable_counts():
     response = TestClient(create_app("sqlite+pysqlite:///:memory:")).get("/sources")
 
-    assert "官方目录来源 82 家" in response.text
+    assert "官方目录来源 85 家" in response.text
     assert "演示来源 8 家" in response.text
     assert "当前可调度 8 家" in response.text
 
