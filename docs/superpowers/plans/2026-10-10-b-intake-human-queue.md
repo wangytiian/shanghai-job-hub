@@ -15,6 +15,7 @@
 - 历史重判只处理真实、待核验、已确认为新招聘、未截止且事实版本可追溯的 `REVIEW_NOTE` C；不重判已人工处理、待判断、其他 C 原因或 D。
 - 保留原有 `REVIEW_NOTE` 文案和历史精确匹配；不清除原文、来源、岗位记录或已有用户修改。
 - 每项改动先写失败测试，看到预期失败后写最少实现并重新运行测试。
+- **安全执行顺序：先完成 Task 2 的发布拦截，再完成 Task 1 的 B 级自动入库，随后执行 Task 3 和 Task 4。** 当前运行中的网页不得在拦截上线前接收新的待确认 B。
 
 ---
 
@@ -45,7 +46,7 @@ def test_notice_without_role_or_application_stays_c():
 ```
 
 - [ ] **Step 2: Verify RED.** Run `python -m pytest tests/test_intake_screening.py tests/test_sbs_integration.py tests/test_sspu_collection.py tests/test_b_pilot_intake.py -q`; expected failures must be the new B expectations, not import or fixture errors.
-- [ ] **Step 3: Implement minimal rules.** Keep hard filters and A precedence. B requires a specific role title, job-specific duty/requirement text, junior/degree evidence, and explicit application evidence; keep the existing social-recruitment B route only when these basic facts exist. In `_save_detail`, use `intake_grade="B" if review_note else intake.grade`, `intake_route="普通待核验" if review_note else intake.route`; update the changed-content branch likewise. No other candidate verdict may enter B by this mapping.
+- [ ] **Step 3: Implement minimal rules.** Keep hard filters and A precedence. B requires a specific role title, job-specific duty/requirement text, junior/degree evidence, and explicit application evidence; keep the existing social-recruitment B route only when these basic facts exist. Move the existing `REVIEW_NOTE` literal unchanged into `intake_screening.py` and re-export it from `review_intake.py`, so direct rule/AI B and `review_only` share one persisted pending-audience marker. In `_save_detail`, use `intake_grade="B" if review_note else intake.grade`, `intake_route="普通待核验" if review_note else intake.route`; update the changed-content branch likewise. No other candidate verdict may enter B by this mapping.
 - [ ] **Step 4: Verify GREEN.** Re-run the exact focused command and inspect changed C expectations; add a negative test if a generic recruitment notice or a different-position paragraph incorrectly becomes B.
 - [ ] **Step 5: Review diff.** Run `git diff -- app/services/intake_screening.py app/services/real_collection.py tests/test_intake_screening.py tests/test_sbs_integration.py tests/test_sspu_collection.py tests/test_b_pilot_intake.py`; preserve unrelated existing changes in these dirty files.
 
