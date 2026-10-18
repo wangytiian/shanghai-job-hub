@@ -17,6 +17,8 @@ def review_job(
     note: str,
     operator_name: str,
     actor_user_id: int | None = None,
+    *,
+    commit: bool = True,
 ) -> Job:
     job = session.get(Job, job_id)
     if job is None:
@@ -59,5 +61,6 @@ def review_job(
             actor_user_id=actor_user_id,
         )
     )
-    session.commit()
+    job.row_version += 1
+    session.commit() if commit else session.flush()
     return job

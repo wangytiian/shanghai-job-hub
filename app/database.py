@@ -56,6 +56,10 @@ def _upgrade_sqlite_columns(engine) -> None:
             "row_version": "INTEGER NOT NULL DEFAULT 1",
         },
         "jobs": {
+            "role_details_status": "VARCHAR(20) NOT NULL DEFAULT 'unknown'",
+            "role_details_evidence": "TEXT NOT NULL DEFAULT ''",
+            "confirmed_content_json": "TEXT NOT NULL DEFAULT ''",
+            "confirmed_content_version": "INTEGER NOT NULL DEFAULT 0",
             "is_demo": "BOOLEAN NOT NULL DEFAULT 1",
             "announcement_title": "VARCHAR(200) NOT NULL DEFAULT ''",
             "evidence_status": "VARCHAR(30) NOT NULL DEFAULT '正文已提取'",
@@ -145,3 +149,6 @@ def _upgrade_sqlite_columns(engine) -> None:
                     "ON source_trial_runs(source_id) WHERE state = 'running'"
                 )
             )
+        if "work_items" in table_names:
+            connection.execute(text("UPDATE work_items SET status='needs_review', error_code='duplicate_active_key_migration' WHERE id IN (SELECT id FROM (SELECT id, row_number() OVER (PARTITION BY dedupe_key ORDER BY id) AS n FROM work_items WHERE status IN ('queued','running')) AS ranked WHERE n>1)"))
+            connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_work_items_active_dedupe ON work_items(dedupe_key) WHERE status IN ('queued','running')"))

@@ -4,7 +4,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 
-CURRENT_SCHEMA_REVISION = "0002_source_diagnostics"
+CURRENT_SCHEMA_REVISION = "0004_screenshot_imports"
 
 
 def cloud_schema_is_ready(session: Session) -> bool:

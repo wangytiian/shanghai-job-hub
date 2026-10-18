@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}截图转招聘内容 · 招聘内容运营工作台{% endblock %}
+{% block content %}
+<link rel="stylesheet" href="/static/screenshot_import.css">
+<section class="page-heading"><span class="eyebrow">SCREENSHOT WORKSPACE</span><h1>截图转招聘内容</h1><p>上传一篇公告的截图，在同一页核对事实，再生成微信群和公众号内容。</p></section>
+<ol class="screenshot-steps" aria-label="处理步骤"><li aria-current="step"><span>1</span>上传材料</li><li><span>2</span>对照核验</li><li><span>3</span>审核与复制</li></ol>
+<section class="panel screenshot-upload-panel">
+  <form method="post" action="/imports/screenshots" enctype="multipart/form-data" data-screenshot-upload>
+    <input type="hidden" name="submission_key" value="{{ submission_key }}">
+    <div class="screenshot-dropzone" data-dropzone>
+      <span class="eyebrow">一篇公告 · 一个单位</span><h2>把招聘截图放到这里</h2>
+      <p>支持 PNG、JPEG、静态 WebP；每批 1–5 张，单张不超过 10 MiB，总计不超过 25 MiB。</p>
+      <label for="screenshot-files" class="button button-primary">选择截图</label>
+      <input id="screenshot-files" name="images" type="file" accept="image/png,image/jpeg,image/webp" multiple class="screenshot-file-input">
+      <p class="muted">按公告顺序排列。长图会自动分片；不同单位的合集请分批上传。</p>
+    </div>
+    <div data-upload-list class="screenshot-upload-list" aria-live="polite"></div>
+    <p data-upload-summary class="muted">尚未选择图片</p>
+    <div class="screenshot-field-grid">
+      <label>来源名称（选填）<input name="source_name" maxlength="160" placeholder="例如：招聘单位官方公众号"></label>
+      <label>原文链接（选填）<input name="source_url" type="url" maxlength="500" value="{{ source_url }}" placeholder="https://…"></label>
+      <label class="screenshot-full-width">补充正文（选填）<textarea name="supplemental_text" maxlength="24000" rows="6" placeholder="可以粘贴公告正文，或补充截图中不清楚的内容。与图片冲突的信息需要人工核对。"></textarea></label>
+    </div>
+    <p class="screenshot-privacy">图片将发送至已配置的识别服务。<a href="/settings/ai">查看 AI 模型配置</a>。没有原文链接也可以识别、预览和保存，正式发布前仍需补齐来源和官方依据。</p>
+    <div class="screenshot-error notice notice-warning" data-form-error role="alert" tabindex="-1" hidden></div>
+    <div class="button-group"><button class="button button-primary" type="submit">上传并识别</button><a class="button button-secondary" href="/sources">返回来源监控</a></div>
+    <p data-upload-status class="muted" aria-live="polite"></p>
+  </form>
+</section>
+<section class="section-block"><div class="section-heading"><div><span class="eyebrow">RECENT IMPORTS</span><h2>最近的截图任务</h2></div></div>
+{% if recent %}<div class="panel"><ul class="screenshot-recent-list">{% for entry in recent %}<li><a href="/imports/screenshots/{{ entry.public_id }}"><strong>{{ entry.title or entry.source_name or '未命名招聘公告' }}</strong><small>{{ entry.created_at.strftime('%m-%d %H:%M') }} · {{ {'uploaded':'材料已保存','queued':'等待识别','recognizing':'正在识别','extracting':'正在整理字段','ready':'等待校对','needs_attention':'需要补充或重试'}.get(entry.status, entry.status) }}</small></a></li>{% endfor %}</ul></div>{% else %}<div class="empty-panel screenshot-empty">上传第一篇招聘公告，开始核对并制作两种内容。</div>{% endif %}
+</section>
+<script src="/static/screenshot_import.js" defer></script>
+{% endblock %}

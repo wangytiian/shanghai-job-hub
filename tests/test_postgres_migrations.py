@@ -20,4 +20,4 @@ def test_initial_migration_creates_the_shared_workspace_schema(tmp_path: Path):
     } <= tables
     from sqlalchemy import create_engine
     with create_engine(f"sqlite:///{database_path.as_posix()}").connect() as connection:
-        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0003_source_trials"
+        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "0004_screenshot_imports"

@@ -3,7 +3,7 @@
 {% block content %}
 <section class="page-heading page-heading-actions">
   <div><span class="eyebrow">SOURCE MONITOR</span><h1>来源监控</h1><p>当前已接入公开官网来源；演示来源仅用于规划，不会自动抓取。公众号仅作线索入口，不会自动抓取或发布。</p></div>
-  <div class="button-row"><a class="button button-secondary" href="/sources/wechat-leads/import">导入公众号线索</a><form method="post" action="/tasks/daily-collection"><button class="button button-primary">运行每日采集</button></form></div>
+  <div class="button-row"><a class="button button-primary" href="/imports/screenshots">截图转招聘内容</a><a class="button button-secondary" href="/sources/wechat-leads/import">导入公众号线索</a><form method="post" action="/tasks/daily-collection"><button class="button button-primary">运行每日采集</button></form></div>
 </section>
 {% if health_feedback %}<div class="notice {% if health_feedback_kind == 'success' %}notice-info{% else %}notice-warning{% endif %}"><strong>{% if health_feedback_kind == 'success' %}来源操作完成{% else %}来源操作提示{% endif %}</strong><p>{{ health_feedback }}</p></div>{% endif %}
 <div class="notice notice-info"><strong>{{ source_library_summary.catalog_sources }} 家分层来源库：</strong>官方目录来源 {{ source_library_summary.catalog_sources }} 家；演示来源 {{ source_library_summary.demo_sources }} 家；当前可调度 {{ source_library_summary.schedulable_sources }} 家。仅启用且未暂停的 A 类来源参与每日采集，A 类来源不代表岗位已通过审核。B/C/D 类不会自动抓取，更不会自动发布；公众号只接受运营人员提供的公开文章链接，并且仍须回查官方原文。页面失联也不会被自动认定为招聘结束。</div>

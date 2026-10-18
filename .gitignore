@@ -3,6 +3,7 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.superpowers/
 
 # Local recruiting data and SQLite side files
 data/*.db
@@ -10,6 +11,7 @@ data/*.sqlite
 data/*.sqlite3
 data/*.db-*
 backups/
+data/uploads/recruitment/
 
 # Local secrets and machine-specific settings
 .env

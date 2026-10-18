@@ -25,6 +25,8 @@ class Settings:
     task_lease_seconds: int = 120
     task_heartbeat_seconds: int = 30
     task_queue_limit: int = 50
+    screenshot_upload_root: str = "data/uploads/recruitment"
+    screenshot_executor_enabled: bool = True
 
     def __post_init__(self) -> None:
         if self.app_env not in _VALID_ENVIRONMENTS:
@@ -51,7 +53,8 @@ def _csv_setting(name: str) -> tuple[str, ...]:
 
 def load_settings() -> Settings:
     app_env = os.getenv("APP_ENV", "local").strip().lower()
-    database_url = os.getenv("DATABASE_URL", "sqlite:///data/recruiting_local.db").strip()
+    default_database = "sqlite+pysqlite:///:memory:" if app_env == "test" else "sqlite:///data/recruiting_local.db"
+    database_url = os.getenv("DATABASE_URL", default_database).strip()
     return Settings(
         app_env=app_env,
         database_url=database_url,
@@ -65,4 +68,6 @@ def load_settings() -> Settings:
         task_lease_seconds=int(os.getenv("TASK_LEASE_SECONDS", "120")),
         task_heartbeat_seconds=int(os.getenv("TASK_HEARTBEAT_SECONDS", "30")),
         task_queue_limit=int(os.getenv("TASK_QUEUE_LIMIT", "50")),
+        screenshot_upload_root=os.getenv("SCREENSHOT_UPLOAD_ROOT", "data/uploads/recruitment").strip(),
+        screenshot_executor_enabled=os.getenv("SCREENSHOT_EXECUTOR_ENABLED", "1" if app_env == "local" else "0").lower() in {"1", "true", "yes"},
     )

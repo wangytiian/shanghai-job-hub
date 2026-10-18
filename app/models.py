@@ -1,4 +1,5 @@
 from datetime import datetime
+from uuid import uuid4
 
 from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -175,6 +176,10 @@ class Job(Base):
     intake_evidence: Mapped[str] = mapped_column(String(160), default="", nullable=False)
     intake_confidence: Mapped[str] = mapped_column(String(10), default="低", nullable=False)
     attachment_links: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    role_details_status: Mapped[str] = mapped_column(String(20), default="unknown", nullable=False)
+    role_details_evidence: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    confirmed_content_json: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    confirmed_content_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     parent_job_id: Mapped[int | None] = mapped_column(ForeignKey("jobs.id"), nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     row_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
@@ -307,6 +312,9 @@ class AuditEvent(Base):
 
 class WorkItem(Base):
     __tablename__ = "work_items"
+    __table_args__ = (Index("uq_work_items_active_dedupe", "dedupe_key", unique=True,
+                           sqlite_where=text("status IN ('queued','running')"),
+                           postgresql_where=text("status IN ('queued','running')")),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     batch_id: Mapped[int | None] = mapped_column(ForeignKey("task_runs.id"), nullable=True)
@@ -329,3 +337,76 @@ class WorkItem(Base):
     error_code: Mapped[str] = mapped_column(String(80), default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
+
+
+class ScreenshotImport(Base):
+    __tablename__ = "screenshot_imports"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    public_id: Mapped[str] = mapped_column(String(36), default=lambda: uuid4().hex, unique=True, nullable=False)
+    submission_key: Mapped[str] = mapped_column(String(80), unique=True, nullable=False)
+    parent_import_id: Mapped[int | None] = mapped_column(ForeignKey("screenshot_imports.id"), nullable=True)
+    job_id: Mapped[int | None] = mapped_column(ForeignKey("jobs.id"), unique=True, nullable=True)
+    source_name: Mapped[str] = mapped_column(String(160), default="", nullable=False)
+    source_url: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    title: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+    supplemental_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    ocr_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    edited_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    fields_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    evidence_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    conflicts_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    selected_roles_json: Mapped[str] = mapped_column(Text, default="[]", nullable=False)
+    extraction_chunks_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="uploaded", nullable=False)
+    error_code: Mapped[str] = mapped_column(String(60), default="", nullable=False)
+    error_message: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    content_revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    row_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    material_complete: Mapped[bool] = mapped_column(default=False, nullable=False)
+    rule_version: Mapped[str] = mapped_column(String(40), default="screenshot-v1", nullable=False)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    updated_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, onupdate=datetime.now, nullable=False)
+
+
+class ScreenshotAsset(Base):
+    __tablename__ = "screenshot_assets"
+    __table_args__ = (UniqueConstraint("import_id", "pixel_sha256", name="uq_screenshot_import_pixels"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    import_id: Mapped[int] = mapped_column(ForeignKey("screenshot_imports.id"), index=True, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(40), default="image/png", nullable=False)
+    image_format: Mapped[str] = mapped_column(String(10), default="PNG", nullable=False)
+    width: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    height: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    byte_size: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    original_sha256: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    pixel_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="uploaded", nullable=False)
+
+
+class ScreenshotPiece(Base):
+    __tablename__ = "screenshot_pieces"
+    __table_args__ = (UniqueConstraint("asset_id", "piece_index", name="uq_screenshot_asset_piece"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    asset_id: Mapped[int] = mapped_column(ForeignKey("screenshot_assets.id"), index=True, nullable=False)
+    piece_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    x: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    y: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    width: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    height: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    pixel_sha256: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    cache_key: Mapped[str] = mapped_column(String(160), default="", index=True, nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(40), default="image/png", nullable=False)
+    text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="uploaded", nullable=False)
+    error_code: Mapped[str] = mapped_column(String(60), default="", nullable=False)
+    error_message: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    model: Mapped[str] = mapped_column(String(80), default="", nullable=False)
+    elapsed_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    usage_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    recognized_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

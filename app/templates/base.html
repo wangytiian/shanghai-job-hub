@@ -20,6 +20,7 @@
         <a href="/jobs" {% if active_nav == 'jobs' %}aria-current="page"{% endif %}>岗位中心</a>
         <span class="nav-disabled" title="第二批上线">审核工作台<small>第二批</small></span>
         <a href="/queues" {% if active_nav == 'queues' %}aria-current="page"{% endif %}>内容队列</a>
+        <a href="/imports/screenshots" {% if active_nav == 'screenshots' %}aria-current="page"{% endif %}>截图转内容</a>
         <a href="/sources" {% if active_nav == 'sources' %}aria-current="page"{% endif %}>来源监控</a>
         <a href="/settings/ai" {% if active_nav == 'ai_settings' %}aria-current="page"{% endif %}>AI 模型配置</a>
         {% if cloud_runtime %}<a href="/account/password">修改密码</a>{% endif %}

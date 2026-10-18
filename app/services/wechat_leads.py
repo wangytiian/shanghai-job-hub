@@ -16,6 +16,11 @@ PROMOTION_KEYWORDS = ("课程", "培训", "报班", "优惠", "试听", "开课"
 RECRUITMENT_KEYWORDS = ("招聘", "招录", "报名", "事业单位", "公务员", "国企", "社工", "辅警")
 
 
+class WechatVerificationError(ValueError):
+    def __init__(self):
+        super().__init__("微信要求完成验证，请上传截图或补充正文继续整理招聘内容")
+
+
 class _WechatArticleParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -61,6 +66,8 @@ def _validate_public_wechat_url(url: str) -> str:
 
 
 def _extract_article(html: str) -> tuple[str, str]:
+    if "wappoc_appmsgcaptcha" in html or ("完成验证后即可继续访问" in html and "js_content" not in html):
+        raise WechatVerificationError()
     parser = _WechatArticleParser()
     parser.feed(html)
     title = _normalize_text(parser.title)
@@ -91,6 +98,12 @@ def import_public_wechat_article(session: Session, source: Source, url: str, cli
         timeout=12,
     )
     response.raise_for_status()
+    final_url = str(getattr(response, "url", normalized_url))
+    final = urlparse(final_url)
+    if final.path == "/mp/wappoc_appmsgcaptcha":
+        raise WechatVerificationError()
+    if final.hostname and final.hostname.lower() != "mp.weixin.qq.com":
+        raise ValueError("文章跳转到了非微信地址，请改用截图上传")
     title, evidence_text = _extract_article(response.text)
     if _is_promotion_only(title, evidence_text):
         raise ValueError("该文章为课程或培训推广内容，未作为招聘线索入库")

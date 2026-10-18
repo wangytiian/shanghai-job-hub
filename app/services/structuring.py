@@ -33,6 +33,9 @@ class StructuringInput:
     ai_confidence: str = "低"
     verification_checks: dict[str, bool] | None = None
     announcement_title: str = ""
+    role_details_status: str = "unknown"
+    role_details_evidence: str = ""
+    review_policy: str = "legacy"
 
 
 class StructuringValidationError(ValueError):
@@ -61,6 +64,8 @@ def _validate_input(data: StructuringInput) -> None:
         ("direction_tags", "专业方向"),
         ("official_url", "官方报名链接"),
     ):
+        if data.review_policy == "screenshot-guided-review-v1" and field_name in {"job_family", "recruitment_type", "direction_tags", "location_category"}:
+            continue
         if not getattr(data, field_name).strip():
             errors[field_name] = f"{label}不能为空"
 
@@ -70,7 +75,16 @@ def _validate_input(data: StructuringInput) -> None:
         errors["posting_scope"] = "附件尚未核验，补齐岗位明细后才能进入待审核"
     if data.posting_scope in {"insufficient_information", "non_job_notice"}:
         errors["posting_scope"] = "该公告信息尚不完整，补充事实后才能进入待审核"
-    if data.posting_scope == "multi_role_announcement" and data.attachment_status != "checked":
+    details_checked = False
+    try:
+        details_checked = data.role_details_status == "checked" and bool(json.loads(data.role_details_evidence or "[]"))
+    except (ValueError, TypeError):
+        pass
+    if data.attachment_status == "pending":
+        errors["attachment_status"] = "附件尚未核验"
+    if data.posting_scope == "multi_role_announcement" and not (
+        data.attachment_status == "checked" or (data.attachment_status == "not_required" and details_checked)
+    ):
         errors["attachment_status"] = "多岗位公告必须先完成附件核验"
     if data.application_method == "email" and not data.application_contact.strip():
         errors["application_contact"] = "邮箱投递必须填写报名邮箱"
@@ -104,6 +118,8 @@ def structure_job(
     data: StructuringInput,
     operator_name: str,
     expected_row_version: int | None = None,
+    *,
+    commit: bool = True,
 ) -> Job:
     _validate_input(data)
     job = session.get(Job, job_id)
@@ -137,6 +153,8 @@ def structure_job(
         "distribution_recommendation",
         "ai_rationale",
         "ai_confidence",
+        "role_details_status",
+        "role_details_evidence",
     ):
         setattr(job, field_name, getattr(data, field_name).strip())
     job.announcement_title = data.announcement_title.strip() or job.announcement_title or job.job_title
@@ -174,5 +192,5 @@ def structure_job(
             operator_name=operator_name,
         )
     )
-    session.commit()
+    session.commit() if commit else session.flush()
     return job

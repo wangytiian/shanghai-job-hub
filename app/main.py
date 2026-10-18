@@ -1,4 +1,5 @@
 from pathlib import Path
+from contextlib import asynccontextmanager
 import json
 import secrets
 from datetime import datetime, timedelta
@@ -10,11 +11,11 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from sqlalchemy import case, func, or_, select, text
+from sqlalchemy import case, func, or_, select, text, update
 from sqlalchemy.orm import Session
 
 from app.database import create_database, create_session_factory
-from app.config import Settings, load_settings
+from app.config import Settings, SettingsError, load_settings
 from app.auth.service import AuthenticationError, authenticate, change_password, create_user, csrf_valid, issue_session, reset_password, resolve_session, revoke_user_sessions
 from app.auth.permissions import PermissionDenied, require_permission
 from app.models import (
@@ -46,7 +47,9 @@ from app.services.intake_promotion import promote_review_only_job
 from app.services.review_intake import REVIEW_NOTE
 from app.services.source_candidate_policy import RULE_VERSION
 from app.seed import seed_demo_data
-from app.services.distribution import build_wechat_draft, create_distribution_items, filter_current_queue_items
+from app.services.distribution import build_wechat_draft, create_distribution_items, filter_current_queue_items, distribution_blockers
+from app.services.ai_runtime import create_ai_settings_service
+from app.services.screenshot_runtime import start_screenshot_executor, stop_screenshot_executor
 from app.services.real_collection import REAL_SOURCE_NAME, collect_due_sources, collect_shanghai_sasac
 from app.sources.catalog import OFFICIAL_SOURCE_CATALOG, ensure_official_source_catalog
 from app.services.reviews import review_job
@@ -61,7 +64,7 @@ from app.services.notice_classification import (
     suggested_new_recruitment_jobs,
 )
 from app.services.tasks import mark_interrupted_task_runs, run_demo_collection
-from app.services.wechat_leads import import_public_wechat_article
+from app.services.wechat_leads import import_public_wechat_article, WechatVerificationError
 from app.services.publication_safety import return_unsafe_publishable_jobs
 from app.services.deadline_policy import expire_known_deadline_jobs
 from app.services.attachment_parser import create_pending_child_jobs, parse_xlsx_role_candidates
@@ -76,10 +79,25 @@ DEFAULT_DATABASE_URL = f"sqlite:///{DEFAULT_DATABASE_PATH.as_posix()}"
 
 def create_app(database_url: str | None = None, *, settings: Settings | None = None) -> FastAPI:
     settings = settings or load_settings()
-    database_url = database_url or (settings.database_url if settings.is_cloud else DEFAULT_DATABASE_URL)
+    database_url = database_url or (settings.database_url if settings.app_env in {"test", "cloud"} else DEFAULT_DATABASE_URL)
+    if settings.app_env == "test" and database_url.startswith("sqlite"):
+        from sqlalchemy.engine import make_url
+        test_path = make_url(database_url).database
+        if test_path and test_path != ":memory:" and Path(test_path).resolve() == DEFAULT_DATABASE_PATH.resolve():
+            raise SettingsError("test environment cannot use the operator production database / 业务库")
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    @asynccontextmanager
+    async def lifespan(instance):
+        executor = start_screenshot_executor(session_factory=instance.state.session_factory,
+                                             settings=settings, ai_service=instance.state.ai_settings_service)
+        instance.state.screenshot_executor = executor
+        try:
+            yield
+        finally:
+            stop_screenshot_executor(executor)
     app = FastAPI(
         title="招聘内容运营后台",
+        lifespan=lifespan,
         docs_url=None,
         redoc_url=None,
         openapi_url=None if settings.is_cloud else "/openapi.json",
@@ -98,20 +116,7 @@ def create_app(database_url: str | None = None, *, settings: Settings | None = N
             return_unsafe_publishable_jobs(session)
     app.state.session_factory = session_factory
     app.state.settings = settings
-    if settings.is_cloud or settings.secret_backend == "file":
-        secret_provider = SecretProvider(
-            {
-                "bailian": Path(settings.bailian_secret_file) if settings.bailian_secret_file else None,
-                "openai_compatible": Path(settings.openai_compatible_secret_file)
-                if settings.openai_compatible_secret_file else None,
-            }
-        )
-        app.state.ai_settings_service = AiSettingsService(
-            credential_store_factory=secret_provider.for_provider,
-            openai_client=OpenAICompatibleClient(validate_outbound=validate_public_http_url),
-        )
-    else:
-        app.state.ai_settings_service = AiSettingsService(WindowsCredentialStore())
+    app.state.ai_settings_service = create_ai_settings_service(settings)
     templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
     app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
 
@@ -131,6 +136,12 @@ def create_app(database_url: str | None = None, *, settings: Settings | None = N
 
     def required_action_for_request(request: Request) -> str:
         path = request.url.path
+        if path.startswith("/distribution/") and (path.endswith("/copy-payload") or path.endswith("/ai-content")):
+            return "distribution.publish"
+        if path.startswith("/jobs/") and path.endswith("/distribution"):
+            return "distribution.publish"
+        if path.startswith("/imports/screenshots") and request.method == "POST" and path.endswith("/retry"):
+            return "task.submit"
         if path.startswith("/users"):
             return "accounts.manage"
         if path.startswith("/settings/"):
@@ -863,6 +874,8 @@ def create_app(database_url: str | None = None, *, settings: Settings | None = N
             try:
                 with httpx.Client(follow_redirects=True) as client:
                     job = import_public_wechat_article(session, source, article_url, client)
+            except WechatVerificationError:
+                return RedirectResponse("/imports/screenshots?" + urlencode({"source_url":article_url,"reason":"wechat_verification"}), status_code=303)
             except (ValueError, httpx.HTTPError) as exc:
                 return templates.TemplateResponse(
                     request,
@@ -1644,7 +1657,7 @@ def create_app(database_url: str | None = None, *, settings: Settings | None = N
                     ),
                     status_code=409,
                 )
-            errors = validate_publishable(job)
+            errors = distribution_blockers(job, item)
             if errors:
                 return templates.TemplateResponse(
                     request,
@@ -1682,6 +1695,12 @@ def create_app(database_url: str | None = None, *, settings: Settings | None = N
 
     @app.post("/distribution/{item_id}/wechat/ai-content")
     def refine_wechat_draft_with_ai(item_id: int):
+        def feedback_redirect(feedback: str, message: str):
+            return RedirectResponse(
+                url=f"/distribution/{item_id}/wechat?{urlencode({'ai_feedback': feedback, 'ai_message': message})}",
+                status_code=303,
+            )
+
         with get_session() as session:
             item = session.get(DistributionItem, item_id)
             if item is None or item.channel != "公众号":
@@ -1694,32 +1713,82 @@ def create_app(database_url: str | None = None, *, settings: Settings | None = N
                     url=f"/distribution/{item_id}/wechat?{urlencode({'ai_feedback': 'error', 'ai_message': '岗位事实已更新，旧草稿不能继续提炼；请重新审核并生成草稿。'})}",
                     status_code=303,
                 )
-            validation_errors = validate_publishable(job)
+            validation_errors = distribution_blockers(job, item)
             if validation_errors:
                 return RedirectResponse(
                     url=f"/distribution/{item_id}/wechat?{urlencode({'ai_feedback': 'error', 'ai_message': '；'.join(validation_errors)})}",
                     status_code=303,
                 )
+            if item.is_manually_edited:
+                return feedback_redirect("error", "此草稿已有人工修改，已保留原稿，不执行 AI 覆盖。")
+            expected_job_version = job.version
+            expected_job_row_version = job.row_version
+            expected_item_row_version = item.row_version
+            prompt = build_content_prompt(job)
+            request_error = False
             try:
-                content = get_ai_settings_service().complete_text(session, build_content_prompt(job))
-                draft = parse_content_draft(content, job)
-                if not any((draft.company_intro, draft.role_summary, draft.eligibility, draft.career_advice, draft.apply_tip)):
-                    raise ValueError("AI 返回内容没有通过事实校验，已保留基础稿")
-                item.ai_content_json = content
-                item.ai_content_status = "AI 已提炼"
-                item.ai_content_error = ""
-                session.commit()
-                feedback, message = "success", "AI 内容已提炼并套入固定公众号模板，请检查后复制。"
+                complete_text = get_ai_settings_service().freeze_text_request(session)
             except Exception:
-                item.ai_content_status = "基础稿"
-                item.ai_content_error = "AI 提炼未完成，已保留基础稿。请检查当前模型、额度或网络后再试。"
-                session.commit()
-                feedback, message = "error", item.ai_content_error
-        return RedirectResponse(
-            url=f"/distribution/{item_id}/wechat?{urlencode({'ai_feedback': feedback, 'ai_message': message})}",
-            status_code=303,
+                request_error = True
+        # Network I/O must not hold a database transaction or a stale ORM session.
+        content = ""
+        try:
+            if request_error:
+                raise ValueError("text provider unavailable")
+            content = complete_text(prompt)
+            draft = parse_content_draft(content, job)
+            if not any((draft.company_intro, draft.role_summary, draft.eligibility, draft.career_advice, draft.apply_tip)):
+                raise ValueError("empty fact-checked draft")
+        except Exception:
+            request_error = True
+
+        with get_session() as session:
+            current_item = session.get(DistributionItem, item_id)
+            current_job = session.get(Job, job.id)
+            if (
+                current_item is None or current_job is None
+                or current_job.version != expected_job_version
+                or current_job.row_version != expected_job_row_version
+                or current_item.row_version != expected_item_row_version
+                or current_item.job_version != expected_job_version
+                or current_item.is_manually_edited
+                or distribution_blockers(current_job, current_item)
+            ):
+                return feedback_redirect("error", "提炼期间材料或草稿已变化，未写入过时结果，请刷新后检查。")
+            error_message = "AI 提炼未完成，已保留原稿。请检查当前模型、额度或网络后再试。"
+            values = {
+                "ai_content_status": current_item.ai_content_status if request_error and current_item.ai_content_json else ("基础稿" if request_error else "AI 已提炼"),
+                "ai_content_error": error_message if request_error else "",
+                "row_version": expected_item_row_version + 1,
+            }
+            if not request_error:
+                values["ai_content_json"] = content
+            changed = session.execute(
+                update(DistributionItem).where(
+                    DistributionItem.id == item_id,
+                    DistributionItem.row_version == expected_item_row_version,
+                    DistributionItem.job_version == expected_job_version,
+                    DistributionItem.is_manually_edited.is_(False),
+                    DistributionItem.job_id.in_(select(Job.id).where(
+                        Job.id == job.id,
+                        Job.version == expected_job_version,
+                        Job.row_version == expected_job_row_version,
+                    )),
+                ).values(**values).execution_options(synchronize_session=False)
+            ).rowcount
+            if changed != 1:
+                session.rollback()
+                return feedback_redirect("error", "材料或草稿已变化，未覆盖当前内容，请刷新后检查。")
+            session.commit()
+        return feedback_redirect(
+            "error" if request_error else "success",
+            error_message if request_error else "AI 内容已提炼并套入固定公众号模板，请检查后复制。",
         )
 
+    from app.routes.screenshot_imports import register_screenshot_routes
+    from app.routes.screenshot_upload_limit import ScreenshotUploadLimit
+    register_screenshot_routes(app, templates, page_context)
+    app.add_middleware(ScreenshotUploadLimit)
     return app
 
 

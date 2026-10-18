@@ -9,6 +9,7 @@
 <div class="notice notice-info"><strong>发布边界：</strong>文章只会生成内部“待核验”线索。必须补充单位或政府官方原文和报名入口，才能进入后续审核。</div>
 {% if error %}<div class="notice notice-error"><strong>本次未导入：</strong>{{ error }}</div>{% endif %}
 <section class="panel form-panel">
+  <p><a class="button button-secondary" href="/imports/screenshots">上传截图转招聘内容</a> 文章无法读取时，可上传截图并补充正文。</p>
   <span class="eyebrow">PUBLIC ARTICLE URL</span>
   <h2>粘贴公开文章链接</h2>
   <form method="post" action="/sources/wechat-leads/import" class="stack-form">

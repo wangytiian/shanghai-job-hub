@@ -3,6 +3,7 @@ import json
 
 from app.models import Job
 from app.services.deadline_policy import job_application_deadline
+from app.services.screenshot_review_policy import has_current_review_confirmation
 
 
 UNSPECIFIED_DEADLINE = "公告未明确统一截止时间"
@@ -49,7 +50,15 @@ def validate_publishable(job: Job, today: date | None = None) -> list[str]:
         errors.append("缺少官方链接")
     if not job.evidence_text.strip():
         errors.append("缺少原文证据")
-    if job.quality_score < 70:
+    guided_current = has_current_review_confirmation(job)
+    try:
+        snapshot = json.loads(job.confirmed_content_json or "{}")
+        guided_present = isinstance(snapshot, dict) and "review_confirmation" in snapshot
+    except (ValueError, TypeError):
+        guided_present = False
+    if guided_present and not guided_current:
+        errors.append("截图一次终审证明已失效，请按当前事实重新核验")
+    if job.quality_score < 70 and not guided_current:
         errors.append("质量分不足70")
     if any(flag in job.risk_flags for flag in ("尚未人工核验", "不得对外发布", "未解决")):
         errors.append("存在尚未人工核验或未解决风险")
@@ -57,6 +66,15 @@ def validate_publishable(job: Job, today: date | None = None) -> list[str]:
         errors.append("公告范围不满足发布条件")
     if job.attachment_status == "pending":
         errors.append("附件尚未核验")
+    if job.posting_scope == "multi_role_announcement" and job.attachment_status != "checked":
+        try:
+            details_checked = job.role_details_status == "checked" and bool(json.loads(job.role_details_evidence or "[]"))
+        except (ValueError, TypeError):
+            details_checked = False
+        if job.attachment_status != "not_required" or not details_checked:
+            errors.append("多岗位明细尚未核验")
+    if job.confirmed_content_json and job.confirmed_content_version != job.version:
+        errors.append("已确认内容快照已过期，请重新核验")
     if not verification_checks_complete(job.verification_checks):
         errors.append("人工核验清单未完整确认")
     elif job.verification_version != job.version:
