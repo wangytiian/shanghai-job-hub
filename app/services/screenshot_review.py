@@ -108,6 +108,10 @@ def _original_deadline(text):
     candidates, historical, unresolved, unresolved_update = [], False, False, False
     date_pattern = r"20\d{2}\s*(?:年|[-/.])\s*\d{1,2}\s*(?:月|[-/.])\s*\d{1,2}\s*日?"
     for clause in re.split(r"[。；;\n]", text):
+        # Explicit absence is not a damaged date. Match the whole clause only:
+        # a no-deadline statement must not hide a real restriction beside it.
+        if re.fullmatch(r"\s*(?:公告未明确统一截止(?:时间|日期)|(?:报名)?截止(?:时间|日期)\s*[：:]\s*(?:未明确|未公布|未提供|未注明))\s*", clause):
+            continue
         deadline_label = re.search(r"(?:报名|报考|申请|投递|应聘).{0,8}(?:截止|截至|结束)|截止日期|截止时间", clause)
         window_label = re.search(r"(?:报名|报考|申请|投递|应聘)(?:时间|期限)\s*[：:]?", clause)
         if not deadline_label and not window_label:
@@ -228,7 +232,7 @@ def collect_review_issues(record, facts, *, acknowledgement=False) -> tuple[Revi
     deadline = value("deadline")
     parsed = known_deadline(deadline)
     if deadline != UNSPECIFIED_DEADLINE and parsed is None:
-        add("fields.deadline", "deadline_unresolved", "截止日期缺失、年份不明或日期无效", f"请依据原文填写完整日期，或明确选择“{UNSPECIFIED_DEADLINE}”")
+        add("fields.deadline", "deadline_unresolved", "截止日期格式无效或缺少年份", f"有日期时请依据原文填写完整年月日；原文未规定统一期限可留空，确认时保留“{UNSPECIFIED_DEADLINE}”")
     elif parsed is not None and parsed < date.today():
         add("fields.deadline", "deadline_expired", "报名已截止", "请核对官方最新有效日期；过期内容仅保留草稿")
     original_problem, original_deadline = _original_deadline(text)
